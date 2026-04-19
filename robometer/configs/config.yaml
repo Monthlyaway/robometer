@@ -217,6 +217,9 @@ loss:
   predict_last_frame_progress: false  # If true, only compute progress loss for the last frame
   progress_loss_type: "discrete"  # Options: "l1", "l2", or "discrete" (default: "l2")
   progress_discrete_bins: 10  # Number of discrete bins for progress when using discrete loss (default: 10)
+  struct_loss_enabled: false
+  struct_loss_type: "entropy"  # Options: "entropy" or "l2_smooth"
+  struct_lambda: 0.1
 
 # =====================================================================================
 # Logging and Output Configuration

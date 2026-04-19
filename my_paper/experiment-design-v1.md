@@ -42,7 +42,32 @@ uv sync --extra robometer
 
 这会安装 `torch==2.8.0` (CUDA 12.8)、`transformers>=4.57`、`trl==0.20.0` 等全部依赖。
 
-### 0.4 验证安装
+### 0.4 修复 torchcodec 版本兼容性
+
+`uv sync` 会安装最新的 `torchcodec`（如 0.11.1），但它要求 `torch>=2.11`，
+与本项目的 `torch==2.8.0` 不兼容。需要手动降级到对应版本。
+
+版本对应关系（来源: [torchcodec README](https://github.com/pytorch/torchcodec)）:
+
+| torchcodec | torch |
+|------------|-------|
+| 0.7 / 0.6  | 2.8   |
+| 0.5 / 0.4  | 2.7   |
+| 0.2        | 2.6   |
+
+```bash
+# 激活 venv 后降级 torchcodec
+source .venv/bin/activate
+pip install torchcodec==0.7
+
+# 验证
+python -c "import torchcodec; print('torchcodec OK:', torchcodec.__version__)"
+```
+
+> **重要**: AutoDL 服务器重启后 pip 安装的包不会丢失（.venv 在数据盘），
+> 但如果重新执行 `uv sync` 会覆盖回不兼容的版本，需要再次降级。
+
+### 0.5 验证安装
 
 ```bash
 uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
@@ -50,7 +75,7 @@ uv run python -c "import transformers; print(transformers.__version__)"
 uv run python -c "from robometer.models.rbm import RBM; print('OK')"
 ```
 
-### 0.5 WandB 配置
+### 0.6 WandB 配置
 
 训练默认用 WandB 记日志。两种选择:
 
@@ -62,11 +87,30 @@ uv run wandb login   # 输入你的 API key
 # 在训练命令中加: logging.log_to=[]
 ```
 
-### 0.6 AutoDL 特别说明
+### 0.7 AutoDL 特别说明
 
 - 确认 CUDA driver >= 12.8: `nvidia-smi`
 - 确认磁盘空间 >= 50GB（数据 + 模型 + checkpoints）
 - AutoDL 学术加速: `source /etc/network_turbo`（如果平台支持）
+
+### 0.8 服务器重启后恢复清单
+
+AutoDL 服务器重启后, `.venv/` 中的包不会丢失, 但环境变量和某些状态会重置。
+每次重启后需要:
+
+```bash
+# 1. 恢复环境变量（如果没写入 ~/.bashrc）
+source ~/.bashrc
+
+# 2. 验证 torchcodec 版本（uv sync 可能覆盖）
+source .venv/bin/activate
+python -c "import torchcodec; print(torchcodec.__version__)"
+# 应输出 0.7.0; 如果不是, 重新执行: pip install torchcodec==0.7
+
+# 3. 验证两个数据路径都已设置且不同
+echo "RAW:       $ROBOMETER_DATASET_PATH"        # 应为 /root/autodl-tmp/raw_datasets
+echo "PROCESSED: $ROBOMETER_PROCESSED_DATASETS_PATH"  # 应为 /root/autodl-tmp/processed_datasets
+```
 
 ---
 
@@ -74,17 +118,34 @@ uv run wandb login   # 输入你的 API key
 
 ### 1.1 环境变量
 
+项目需要 **两个** 数据路径环境变量, 必须指向 **不同目录**:
+
+| 变量 | 用途 | 路径 |
+|------|------|------|
+| `ROBOMETER_DATASET_PATH` | 原始 HF 下载（视频 + parquet） | `/root/autodl-tmp/raw_datasets` |
+| `ROBOMETER_PROCESSED_DATASETS_PATH` | 预处理后的索引缓存 | `/root/autodl-tmp/processed_datasets` |
+
 ```bash
+export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
 export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
+echo 'export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets' >> ~/.bashrc
 echo 'export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets' >> ~/.bashrc
-mkdir -p $ROBOMETER_PROCESSED_DATASETS_PATH
+mkdir -p $ROBOMETER_DATASET_PATH $ROBOMETER_PROCESSED_DATASETS_PATH
 ```
+
+> **关键**: 这两个目录必须分开。
+> - `ROBOMETER_DATASET_PATH` 下存放原始数据: `libero_rfm/`、`libero_failure_rfm/`
+> - `ROBOMETER_PROCESSED_DATASETS_PATH` 下存放预处理结果: `abraranwar_libero_rfm_libero256_10/` 等
+> - 预处理脚本通过 `ROBOMETER_DATASET_PATH` 找到视频文件, 输出到 `cache_dir`
+>   (配置文件中设为 `ROBOMETER_PROCESSED_DATASETS_PATH`)
+> - 训练代码只读 `ROBOMETER_PROCESSED_DATASETS_PATH`
 
 ### 1.2 HuggingFace 登录
 
 ```bash
 uv run huggingface-cli login
 # 输入你的 HF token (https://huggingface.co/settings/tokens)
+# 也可以直接: uv run huggingface-cli login --token hf_xxxxx
 ```
 
 ### 1.3 下载 LIBERO 数据集（仅需要这些）
@@ -95,36 +156,97 @@ uv run huggingface-cli login
 
 ```bash
 # 成功轨迹（包含 libero256_10, _object, _spatial, _goal, _90 子集）
-huggingface-cli download abraranwar/libero_rfm \
+uv run huggingface-cli download abraranwar/libero_rfm \
   --repo-type dataset \
-  --local-dir $ROBOMETER_PROCESSED_DATASETS_PATH/libero_rfm
+  --local-dir $ROBOMETER_DATASET_PATH/libero_rfm
 
 # 失败轨迹
-huggingface-cli download ykorkmaz/libero_failure_rfm \
+uv run huggingface-cli download ykorkmaz/libero_failure_rfm \
   --repo-type dataset \
-  --local-dir $ROBOMETER_PROCESSED_DATASETS_PATH/libero_failure_rfm
+  --local-dir $ROBOMETER_DATASET_PATH/libero_failure_rfm
 ```
 
-> 下载后检查: `ls $ROBOMETER_PROCESSED_DATASETS_PATH/` 应看到数据文件夹。
-> 如果上面的 repo 结构不对（子集名称不匹配），可能需要运行
-> `./scripts/untar_processed_datasets.sh` 解压, 或查看下载内容手动对齐路径。
-> 最终路径需与 `dataset_category.py` 中的名称匹配, 例如
-> `$ROBOMETER_PROCESSED_DATASETS_PATH/abraranwar_libero_rfm_libero256_10/` 等。
+> 下载后检查: `ls $ROBOMETER_DATASET_PATH/` 应看到 `libero_rfm/` 和
+> `libero_failure_rfm/` 两个文件夹，每个下面有子集目录（如 `libero256_10/`）。
+> 注意是 `ROBOMETER_DATASET_PATH`（raw_datasets），不是 PROCESSED。
 
-### 1.4 下载模型
+### 1.4 预处理数据集（必需步骤）
+
+下载的原始数据是 HuggingFace 格式（parquet + 视频文件），训练代码需要
+预处理后的索引格式。预处理脚本会:
+- 从视频中提取帧（最多 64 帧）
+- 构建轨迹索引（成功/失败/任务映射）
+- 将结果缓存到 `$ROBOMETER_PROCESSED_DATASETS_PATH/` 下的扁平目录
+
+预处理配置文件已准备好（仅包含 LIBERO 数据集）:
+
+```bash
+cd /root/autodl-tmp/robometer
+source .venv/bin/activate
+
+# ROBOMETER_DATASET_PATH 指向原始数据所在目录
+export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
+
+# 运行预处理（约 20-30 分钟，10 个数据子集）
+# cache_dir 在 yaml 中已设为 /root/autodl-tmp/processed_datasets
+python -m robometer.data.scripts.preprocess_datasets \
+  --config robometer/configs/preprocess_libero.yaml
+```
+
+> 预处理配置文件: `robometer/configs/preprocess_libero.yaml`
+> 其中 `cache_dir: "/root/autodl-tmp/processed_datasets"` 控制输出位置。
+>
+> 预处理完成后的目录结构:
+> ```
+> /root/autodl-tmp/
+> ├── raw_datasets/                          # ROBOMETER_DATASET_PATH
+> │   ├── libero_rfm/                        # HF 下载的原始数据
+> │   │   ├── libero256_10/
+> │   │   │   ├── batch_0000/
+> │   │   │   │   └── trajectory_0000.mp4 ...
+> │   │   │   └── train-00000-of-00001.parquet
+> │   │   ├── libero256_object/ ...
+> │   │   └── libero256_90/ ...
+> │   └── libero_failure_rfm/
+> │       ├── libero_10_failure/ ...
+> │       └── libero_90_failure/ ...
+> └── processed_datasets/                    # ROBOMETER_PROCESSED_DATASETS_PATH
+>     ├── abraranwar_libero_rfm_libero256_10/
+>     │   ├── processed_dataset/             # HF Dataset on disk
+>     │   ├── index_mappings.json
+>     │   ├── dataset_info.json
+>     │   └── frames/                        # 提取的 .npz 帧
+>     ├── abraranwar_libero_rfm_libero256_object/ ...
+>     ├── ykorkmaz_libero_failure_rfm_libero_10_failure/ ...
+>     └── ... (共 10 个子集)
+> ```
+
+#### 验证预处理完成
+
+```bash
+# 应输出 10 个以 abraranwar_ 或 ykorkmaz_ 开头的目录
+ls $ROBOMETER_PROCESSED_DATASETS_PATH/ | grep -E "^(abraranwar|ykorkmaz)" | wc -l
+# 应输出: 10
+
+# 检查每个目录结构
+ls $ROBOMETER_PROCESSED_DATASETS_PATH/abraranwar_libero_rfm_libero256_10/
+# 应输出: dataset_info.json  embeddings_cache  frames  index_mappings.json  processed_dataset
+```
+
+### 1.5 下载模型
 
 ```bash
 # 基础 VLM（训练起点）
-huggingface-cli download Qwen/Qwen3-VL-4B-Instruct
+uv run huggingface-cli download Qwen/Qwen3-VL-4B-Instruct
 
 # 预训练 Robometer（用于对比实验 + LoRA 微调基础）
-huggingface-cli download robometer/Robometer-4B
+uv run huggingface-cli download robometer/Robometer-4B
 ```
 
 > HF 模型会缓存到 `~/.cache/huggingface/hub/`。
 > 如果磁盘空间不足, 可以用 `--local-dir` 指定路径, 然后在训练命令中用本地路径。
 
-### 1.5 验证数据加载
+### 1.6 验证数据加载
 
 ```bash
 uv run python -c "

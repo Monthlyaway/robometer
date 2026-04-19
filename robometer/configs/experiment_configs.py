@@ -437,6 +437,18 @@ class LossConfig:
         default=10,
         metadata={"help": "Number of discrete bins for progress when using discrete loss (default: 10)"},
     )
+    struct_loss_enabled: bool = field(
+        default=False,
+        metadata={"help": "Enable structural entropy regularization loss (L_struct)"},
+    )
+    struct_loss_type: str = field(
+        default="entropy",
+        metadata={"help": "Type of structural loss: 'entropy' (max entropy prior) or 'l2_smooth' (L2 temporal smoothness)"},
+    )
+    struct_lambda: float = field(
+        default=0.1,
+        metadata={"help": "Weight for the structural loss term"},
+    )
 
 
 @dataclass

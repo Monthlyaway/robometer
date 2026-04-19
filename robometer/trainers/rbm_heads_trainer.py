@@ -2431,6 +2431,41 @@ class RBMHeadsTrainer(Trainer):
 
         return final_loss, outputs_dict
 
+    def _compute_struct_loss(
+        self,
+        progress_pred: torch.Tensor,
+        mask: torch.Tensor,
+        training: bool = True,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """Compute structural regularization loss on progress predictions.
+
+        Supports two modes via config.loss.struct_loss_type:
+        - 'entropy': Maximum Entropy Increment Prior (paper Section 4.1)
+        - 'l2_smooth': L2 temporal smoothness baseline
+        """
+        loss_type = self.config.loss.struct_loss_type
+        prefix = "train" if training else "eval"
+
+        if self.config.loss.progress_loss_type == "discrete":
+            progress = convert_bins_to_continuous(progress_pred)
+        else:
+            progress = progress_pred.float()
+
+        if progress.dim() == 1:
+            progress = progress.unsqueeze(0)
+
+        delta_t = progress[:, 1:] - progress[:, :-1]
+
+        if loss_type == "l2_smooth":
+            struct_loss = (delta_t ** 2).mean()
+        else:
+            delta_pos = F.softplus(delta_t)
+            p_t = delta_pos / (delta_pos.sum(dim=-1, keepdim=True) + 1e-8)
+            struct_loss = (p_t * torch.log(p_t + 1e-8)).sum(dim=-1).mean()
+
+        log_dict = {f"{prefix}/struct_loss": struct_loss.item()}
+        return struct_loss, log_dict
+
     def _compute_preference_loss(self, model, inputs, return_outputs=False, training=True):
         """Compute preference prediction loss using Bradley-Terry model."""
         model_outputs, model_timing_raw = self.forward_model(model, inputs, sample_type="preference")
@@ -2498,6 +2533,16 @@ class RBMHeadsTrainer(Trainer):
             else:
                 logger.warning(f"NaN detected in success loss")
 
+        if self.config.loss.struct_loss_enabled and self.config.model.train_progress_head:
+            progress_pred_A = progress_logits["A"]
+            struct_loss, struct_log = self._compute_struct_loss(
+                progress_pred_A, target_progress_A_mask, training=training
+            )
+            if not torch.isnan(struct_loss).any():
+                final_loss += self.config.loss.struct_lambda * struct_loss
+            else:
+                logger.warning("NaN detected in struct loss")
+
         # Check for NaN in final loss
         if torch.isnan(final_loss).any():
             logger.warning(f"NaN detected in preference loss")
@@ -2507,6 +2552,9 @@ class RBMHeadsTrainer(Trainer):
 
             prefix = "train" if training else "eval"
             rejected_data_gen_strategy = inputs["rejected_data_gen_strategy"]
+
+            if self.config.loss.struct_loss_enabled and self.config.model.train_progress_head:
+                outputs_dict.update(struct_log)
 
             if self.config.model.train_progress_head and self.config.training.predict_pref_progress:
                 outputs_dict.update({

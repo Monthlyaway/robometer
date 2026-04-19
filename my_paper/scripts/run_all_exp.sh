@@ -15,7 +15,7 @@
 #
 # Timing: ~0.5s/step on RTX 4080S with 2B model.
 #   dry_run (5 steps): ~10s
-#   Single experiment (10000 steps): ~1.5h
+#   Single experiment (5000 steps): ~45min
 #   All A-D: ~6h
 set -e
 
@@ -40,13 +40,14 @@ BASE_ARGS="
   data.train_datasets=[libero_pi0]
   data.eval_datasets=[libero_pi0]
   data.max_frames=8
-  training.per_device_train_batch_size=2
+  training.per_device_train_batch_size=16
   training.gradient_accumulation_steps=1
   training.learning_rate=2e-5
-  training.max_steps=10000
+  training.max_steps=1250
   training.do_eval=false
   training.evaluation_strategy=no
-  training.save_steps=2000
+  training.save_strategy=steps
+  training.save_steps=500
   training.logging_steps=50
   custom_eval.reward_alignment=[libero_pi0]
   custom_eval.policy_ranking=[libero_pi0]

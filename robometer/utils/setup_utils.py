@@ -83,12 +83,16 @@ def _load_checkpoint_weights_from_safetensors(
     if not checkpoint_path.is_dir():
         raise ValueError(f"Checkpoint path is not a directory: {checkpoint_path}")
 
-    # Collect all safetensors files
+    # Collect all safetensors files; fall back to pytorch .bin files
     safetensors_files = list(checkpoint_path.glob("*.safetensors"))
-    if not safetensors_files:
-        raise ValueError(f"No safetensors files found in checkpoint directory: {checkpoint_path}")
+    pytorch_bin_files = list(checkpoint_path.glob("pytorch_model*.bin")) if not safetensors_files else []
+    if not safetensors_files and not pytorch_bin_files:
+        raise ValueError(f"No safetensors or pytorch_model.bin files found in checkpoint directory: {checkpoint_path}")
 
-    logger.info(f"Loading checkpoint weights from {len(safetensors_files)} safetensors file(s) in {checkpoint_path}")
+    use_safetensors = bool(safetensors_files)
+    weight_files = safetensors_files if use_safetensors else pytorch_bin_files
+    fmt = "safetensors" if use_safetensors else "pytorch .bin"
+    logger.info(f"Loading checkpoint weights from {len(weight_files)} {fmt} file(s) in {checkpoint_path}")
 
     # Capture before weights for verification (adapter and progress_head)
     before_weights = {}
@@ -110,11 +114,14 @@ def _load_checkpoint_weights_from_safetensors(
         else:
             logger.warning("No adapter parameters found in model - PEFT may not be applied correctly")
 
-    # Load all safetensors files and merge into a single state dict
+    # Load all weight files and merge into a single state dict
     checkpoint_state_dict = {}
-    for safetensors_file in safetensors_files:
-        logger.debug(f"Loading weights from {safetensors_file.name}")
-        file_state_dict = load_file(str(safetensors_file))
+    for weight_file in weight_files:
+        logger.debug(f"Loading weights from {weight_file.name}")
+        if use_safetensors:
+            file_state_dict = load_file(str(weight_file))
+        else:
+            file_state_dict = torch.load(str(weight_file), map_location="cpu")
         checkpoint_state_dict.update(file_state_dict)
 
     # Check what adapter keys are in checkpoint

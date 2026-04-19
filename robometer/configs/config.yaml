@@ -220,6 +220,7 @@ loss:
   struct_loss_enabled: false
   struct_loss_type: "entropy"  # Options: "entropy" or "l2_smooth"
   struct_lambda: 0.1
+  pref_loss_type: "head"  # Options: "head" (preference head) or "bt_sum" (sum progress outputs as BT potential)
 
 # =====================================================================================
 # Logging and Output Configuration

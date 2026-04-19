@@ -869,7 +869,19 @@ class RBMHeadsTrainer(Trainer):
         with torch.no_grad():
             outputs, _ = self.forward_model(self.model, preference_samples, sample_type="preference")
         logger.trace(f"    Forward pass complete")
-        pref_logits = outputs.pref_logits
+        if self.config.loss.pref_loss_type == "bt_sum":
+            prog_logits = outputs.progress_logits
+            prog_A = prog_logits["A"]
+            prog_B = prog_logits["B"]
+            if self.config.loss.progress_loss_type == "discrete":
+                prog_A = convert_bins_to_continuous(prog_A)
+                prog_B = convert_bins_to_continuous(prog_B)
+            else:
+                prog_A = prog_A.float()
+                prog_B = prog_B.float()
+            pref_logits = (prog_A.sum(dim=-1) - prog_B.sum(dim=-1)).unsqueeze(-1)
+        else:
+            pref_logits = outputs.pref_logits
 
         # Gather predictions and labels across all ranks
         pref_logits = self.accelerator.gather_for_metrics(pref_logits)
@@ -1803,7 +1815,8 @@ class RBMHeadsTrainer(Trainer):
         logger.trace(f"Num preferences: {num_preferences}, Num progress: {num_progress}")
 
         # Compute preference loss if we have preference samples
-        if num_preferences > 0 and preference_inputs and self.config.model.train_preference_head:
+        _run_pref = self.config.model.train_preference_head or self.config.loss.pref_loss_type == "bt_sum"
+        if num_preferences > 0 and preference_inputs and _run_pref:
             with _timer("time/compute_preference_loss", timing_raw=self.timing_raw):
                 preference_loss, loss_dict = self._compute_preference_loss(
                     model, preference_inputs, return_outputs=True, training=training
@@ -2478,8 +2491,21 @@ class RBMHeadsTrainer(Trainer):
         # Get preference labels (1 if first trajectory is preferred, 0 if second trajectory is preferred)
         preference_labels = inputs["preference_labels"]
 
-        # Get preference scores from the preference head
-        preference_scores = model_outputs.pref_logits.squeeze(-1)  # [batch_size]
+        # Get preference scores
+        if self.config.loss.pref_loss_type == "bt_sum":
+            progress_A = progress_logits["A"]
+            progress_B = progress_logits["B"]
+            if self.config.loss.progress_loss_type == "discrete":
+                progress_A = convert_bins_to_continuous(progress_A)
+                progress_B = convert_bins_to_continuous(progress_B)
+            else:
+                progress_A = progress_A.float()
+                progress_B = progress_B.float()
+            potential_A = progress_A.sum(dim=-1)  # [B]
+            potential_B = progress_B.sum(dim=-1)  # [B]
+            preference_scores = potential_A - potential_B
+        else:
+            preference_scores = model_outputs.pref_logits.squeeze(-1)  # [batch_size]
 
         # Clamp logits to prevent extreme values and gradient issues
         preference_scores = torch.clamp(preference_scores, min=-50.0, max=50.0)
@@ -2537,7 +2563,10 @@ class RBMHeadsTrainer(Trainer):
             else:
                 logger.warning(f"NaN detected in success loss")
 
-        if self.config.loss.struct_loss_enabled and self.config.model.train_progress_head:
+        _struct_active = self.config.loss.struct_loss_enabled and (
+            self.config.loss.pref_loss_type == "bt_sum" or self.config.model.train_progress_head
+        )
+        if _struct_active:
             progress_pred_A = progress_logits["A"]
             struct_loss, struct_log = self._compute_struct_loss(
                 progress_pred_A, target_progress_A_mask, training=training
@@ -2557,7 +2586,7 @@ class RBMHeadsTrainer(Trainer):
             prefix = "train" if training else "eval"
             rejected_data_gen_strategy = inputs["rejected_data_gen_strategy"]
 
-            if self.config.loss.struct_loss_enabled and self.config.model.train_progress_head:
+            if _struct_active:
                 outputs_dict.update(struct_log)
 
             if self.config.model.train_progress_head and self.config.training.predict_pref_progress:

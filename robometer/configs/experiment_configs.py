@@ -449,6 +449,10 @@ class LossConfig:
         default=0.1,
         metadata={"help": "Weight for the structural loss term"},
     )
+    pref_loss_type: str = field(
+        default="head",
+        metadata={"help": "'head' (original preference head) or 'bt_sum' (sum progress outputs as BT potential)"},
+    )
 
 
 @dataclass

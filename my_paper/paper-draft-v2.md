@@ -80,9 +80,9 @@ For a given trajectory $\tau \in \mathcal{D}$ of length $T$, we compute the firs
 
 $$\Delta\Phi_t = \Phi_\theta(s_{t+1}) - \Phi_\theta(s_t)$$
 
-We formalize these unconstrained increments into a valid probability distribution. A Softplus activation ensures non-negativity and differentiability. The values are then normalized over the temporal horizon to represent the allocation of task progress:
+We formalize these unconstrained increments into a valid probability distribution via the softmax operator, which is the natural parameterization of the maximum entropy distribution over categorical variables:
 
-$$p_t = \frac{\text{Softplus}(\Delta\Phi_t)}{\sum_{i=0}^{T-1} \text{Softplus}(\Delta\Phi_i)}$$
+$$p_t = \text{Softmax}(\Delta\Phi)_t = \frac{\exp(\Delta\Phi_t)}{\sum_{i=0}^{T-1} \exp(\Delta\Phi_i)}$$
 
 To penalize pathological curvature, we introduce the Maximum Entropy Increment Prior ($\mathcal{L}_{struct}$). This term regularizes the network by minimizing the negative Shannon entropy of the temporal progress distribution:
 

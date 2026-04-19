@@ -42,7 +42,7 @@ class PredictionHeadsMixin(nn.Module):
             # Extract progress settings from model_config if provided
             if model_config is not None:
                 progress_output_size = 1  # Default: continuous output
-                progress_use_sigmoid = True
+                progress_use_sigmoid = getattr(model_config, "progress_use_sigmoid", True)
                 use_discrete_progress = False
                 # Check for progress_loss_type in model_config (direct attribute or under loss)
                 progress_loss_type = None

@@ -83,6 +83,10 @@ class ModelConfig(PretrainedConfig):
         default=None,
         metadata={"help": "Number of discrete bins for progress when using discrete loss (None for continuous)"},
     )
+    progress_use_sigmoid: bool = field(
+        default=True,
+        metadata={"help": "Use Sigmoid in progress head. Set False for bt_sum potential mode (unbounded Phi)."},
+    )
     # rewind sub-config
     rewind: Optional[Dict[str, Any]] = field(default=None)
 
@@ -448,6 +452,10 @@ class LossConfig:
     struct_lambda: float = field(
         default=0.1,
         metadata={"help": "Weight for the structural loss term"},
+    )
+    struct_temperature: float = field(
+        default=0.1,
+        metadata={"help": "Softmax temperature for entropy struct loss. Lower = sharper distribution = stronger gradient."},
     )
     pref_loss_type: str = field(
         default="head",

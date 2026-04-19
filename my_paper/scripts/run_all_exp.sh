@@ -90,6 +90,7 @@ run_a() {
   echo "========== Exp A: Pure BT =========="
   run_train \
     model.train_preference_head=false \
+    model.progress_use_sigmoid=false \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=false \
     loss.pref_loss_type=bt_sum \
@@ -108,6 +109,7 @@ run_b() {
   echo "========== Exp B: BT + L2 Smooth =========="
   run_train \
     model.train_preference_head=false \
+    model.progress_use_sigmoid=false \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=false \
     loss.pref_loss_type=bt_sum \
@@ -128,6 +130,7 @@ run_c() {
   echo "========== Exp C: BT + Entropy (Ours) =========="
   run_train \
     model.train_preference_head=false \
+    model.progress_use_sigmoid=false \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=false \
     loss.pref_loss_type=bt_sum \
@@ -166,6 +169,7 @@ run_e() {
     echo "========== Exp E: Lambda=$LAMBDA =========="
     run_train \
       model.train_preference_head=false \
+      model.progress_use_sigmoid=false \
       "data.sample_type_ratio=[1,0,0]" \
       training.predict_pref_progress=false \
       loss.pref_loss_type=bt_sum \

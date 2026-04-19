@@ -2485,11 +2485,19 @@ class RBMHeadsTrainer(Trainer):
         if loss_type == "l2_smooth":
             struct_loss = (delta_t ** 2 * delta_mask).sum() / delta_mask.sum().clamp(min=1)
         else:
-            delta_pos = F.softplus(delta_t) * delta_mask
-            p_t = delta_pos / (delta_pos.sum(dim=-1, keepdim=True) + 1e-8)
+            # Softmax-based entropy with temperature scaling to amplify small delta differences
+            tau = getattr(self.config.loss, 'struct_temperature', 0.1)
+            masked_delta = delta_t.masked_fill(delta_mask == 0, float('-inf'))
+            p_t = F.softmax(masked_delta / tau, dim=-1)
             struct_loss = (p_t * torch.log(p_t + 1e-8)).sum(dim=-1).mean()
 
         log_dict = {f"{prefix}/struct_loss": struct_loss.item()}
+
+        valid_deltas = delta_t[delta_mask.bool()]
+        if valid_deltas.numel() > 1:
+            log_dict[f"{prefix}/delta_variance"] = valid_deltas.var().item()
+            log_dict[f"{prefix}/delta_mean"] = valid_deltas.mean().item()
+
         return struct_loss, log_dict
 
     def _compute_preference_loss(self, model, inputs, return_outputs=False, training=True):

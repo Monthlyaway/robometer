@@ -16,8 +16,7 @@ eval_subsets:
 
 cache_dir: "/root/autodl-tmp/processed_datasets"
 
-# 目录结构说明:
-# ROBOMETER_DATASET_PATH    = /root/autodl-tmp/raw_datasets     (原始 HF 下载)
+# 目录结构说明: # ROBOMETER_DATASET_PATH    = /root/autodl-tmp/raw_datasets     (原始 HF 下载)
 # ROBOMETER_PROCESSED_DATASETS_PATH = /root/autodl-tmp/processed_datasets (预处理输出)
 # cache_dir 必须和 ROBOMETER_PROCESSED_DATASETS_PATH 一致
 max_frames_for_preprocessing: 64

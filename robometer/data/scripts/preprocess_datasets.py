@@ -886,10 +886,14 @@ class DatasetPreprocessor:
                 root_dir = f"{dataset_root}/{dataset_name}"
                 return f"{root_dir}/{old_path}"  # e.g., "./videos/trajectory_0000.mp4"
 
-            # Load dataset
-            dataset = load_dataset(dataset_path, name=subset, split="train")
-
-            # dataset = dataset.select(range(100))
+            # Try loading from local parquet first to avoid network requests
+            local_parquet_dir = os.path.join(dataset_root, dataset_name, subset)
+            local_parquet = os.path.join(local_parquet_dir, "train-00000-of-00001.parquet")
+            if os.path.exists(local_parquet):
+                rank_0_print(f"Loading from local parquet: {local_parquet_dir}")
+                dataset = load_dataset("parquet", data_dir=local_parquet_dir, split="train")
+            else:
+                dataset = load_dataset(dataset_path, name=subset, split="train")
 
             # Just patch the paths, don't decode videos yet
             dataset = dataset.map(

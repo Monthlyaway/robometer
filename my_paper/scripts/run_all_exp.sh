@@ -2,24 +2,26 @@
 # Run ablation experiments for Structure-Regularized Potential Inference
 #
 # Usage:
-#   bash run_all_exp.sh <experiment>
+#   bash run_all_exp.sh <experiment> [suffix]
 #
 #   <experiment> = dry_run | a | b | c | d | e | all
+#   [suffix]     = optional name suffix appended to output dir, e.g. "round3"
 #
 # Examples:
-#   bash my_paper/scripts/run_all_exp.sh dry_run   # 5-step smoke test
-#   bash my_paper/scripts/run_all_exp.sh a          # Exp A only
-#   bash my_paper/scripts/run_all_exp.sh c          # Exp C only (our method)
-#   bash my_paper/scripts/run_all_exp.sh all        # A-D sequentially
-#   bash my_paper/scripts/run_all_exp.sh e          # Lambda sweep (3 runs)
+#   bash my_paper/scripts/run_all_exp.sh c              # → logs/exp_c_entropy/
+#   bash my_paper/scripts/run_all_exp.sh c round3        # → logs/exp_c_entropy_round3/
+#   bash my_paper/scripts/run_all_exp.sh a final         # → logs/exp_a_pure_bt_final/
+#   bash my_paper/scripts/run_all_exp.sh all v2          # → logs/exp_a_pure_bt_v2/ etc.
+#   bash my_paper/scripts/run_all_exp.sh e sweep1        # → logs/exp_e_lambda_0.01_sweep1/ etc.
 #
 # Timing: ~0.5s/step on RTX 4080S with 2B model.
 #   dry_run (5 steps): ~10s
-#   Single experiment (5000 steps): ~45min
-#   All A-D: ~6h
+#   Single experiment (1250 steps): ~35min
+#   All A-D: ~2.5h
 set -e
 
-EXP="${1:?Usage: bash run_all_exp.sh <dry_run|a|b|c|d|e|all>}"
+EXP="${1:?Usage: bash run_all_exp.sh <dry_run|a|b|c|d|e|all> [suffix]}"
+SUFFIX="${2:-}"
 
 cd /root/autodl-tmp/robometer
 source .venv/bin/activate
@@ -56,13 +58,17 @@ EVAL_TYPES_ARG="custom_eval.eval_types=[policy_ranking,reward_alignment]"
 
 LAUNCH="accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1"
 
+# Append _$SUFFIX to a base name if SUFFIX is set
+name() { if [ -n "$SUFFIX" ]; then echo "${1}_${SUFFIX}"; else echo "$1"; fi; }
+
 run_train() {
   $LAUNCH train.py $BASE_ARGS "$EVAL_TYPES_ARG" "$@"
 }
 
 # ------------------------------------------------------------------
 run_dry_run() {
-  echo "========== Dry Run (5 steps + eval) =========="
+  local N=$(name dry_run)
+  echo "========== Dry Run (5 steps + eval) → $N =========="
   run_train \
     model.train_preference_head=true \
     "data.sample_type_ratio=[1,0,0]" \
@@ -76,8 +82,8 @@ run_dry_run() {
     loss.struct_loss_type=entropy \
     loss.struct_lambda=0.1 \
     loss.progress_loss_type=l2 \
-    training.output_dir=./logs/dry_run \
-    training.exp_name=dry_run \
+    training.output_dir=./logs/$N \
+    training.exp_name=$N \
     training.overwrite_output_dir=True \
     "logging.log_to=[]"
 }
@@ -87,7 +93,8 @@ run_dry_run() {
 #   Table 1 Row A — demonstrates the monotonicity trap
 # ------------------------------------------------------------------
 run_a() {
-  echo "========== Exp A: Pure BT =========="
+  local N=$(name exp_a_pure_bt)
+  echo "========== Exp A: Pure BT → $N =========="
   run_train \
     model.train_preference_head=false \
     model.progress_use_sigmoid=false \
@@ -96,8 +103,8 @@ run_a() {
     loss.pref_loss_type=bt_sum \
     loss.progress_loss_type=l2 \
     loss.struct_loss_enabled=false \
-    training.output_dir=./logs/exp_a_pure_bt \
-    training.exp_name=exp_a_pure_bt \
+    training.output_dir=./logs/$N \
+    training.exp_name=$N \
     "logging.log_to=[tensorboard]"
 }
 
@@ -106,7 +113,8 @@ run_a() {
 #   Table 1 Row B — L2 temporal smoothing is insufficient
 # ------------------------------------------------------------------
 run_b() {
-  echo "========== Exp B: BT + L2 Smooth =========="
+  local N=$(name exp_b_l2_smooth)
+  echo "========== Exp B: BT + L2 Smooth → $N =========="
   run_train \
     model.train_preference_head=false \
     model.progress_use_sigmoid=false \
@@ -117,8 +125,8 @@ run_b() {
     loss.struct_loss_enabled=true \
     loss.struct_loss_type=l2_smooth \
     loss.struct_lambda=0.1 \
-    training.output_dir=./logs/exp_b_l2_smooth \
-    training.exp_name=exp_b_l2_smooth \
+    training.output_dir=./logs/$N \
+    training.exp_name=$N \
     "logging.log_to=[tensorboard]"
 }
 
@@ -127,7 +135,8 @@ run_b() {
 #   Table 1 Row C — Maximum Entropy Increment Prior
 # ------------------------------------------------------------------
 run_c() {
-  echo "========== Exp C: BT + Entropy (Ours) =========="
+  local N=$(name exp_c_entropy)
+  echo "========== Exp C: BT + Entropy (Ours) → $N =========="
   run_train \
     model.train_preference_head=false \
     model.progress_use_sigmoid=false \
@@ -138,8 +147,8 @@ run_c() {
     loss.struct_loss_enabled=true \
     loss.struct_loss_type=entropy \
     loss.struct_lambda=0.1 \
-    training.output_dir=./logs/exp_c_entropy \
-    training.exp_name=exp_c_entropy \
+    training.output_dir=./logs/$N \
+    training.exp_name=$N \
     "logging.log_to=[tensorboard]"
 }
 
@@ -148,15 +157,16 @@ run_c() {
 #   Table 1 Row D — uses preference head + supervised progress labels
 # ------------------------------------------------------------------
 run_d() {
-  echo "========== Exp D: Full Robometer =========="
+  local N=$(name exp_d_robometer)
+  echo "========== Exp D: Full Robometer → $N =========="
   run_train \
     model.train_preference_head=true \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=true \
     loss.pref_loss_type=head \
     loss.struct_loss_enabled=false \
-    training.output_dir=./logs/exp_d_robometer \
-    training.exp_name=exp_d_robometer \
+    training.output_dir=./logs/$N \
+    training.exp_name=$N \
     "logging.log_to=[tensorboard]"
 }
 
@@ -166,7 +176,8 @@ run_d() {
 # ------------------------------------------------------------------
 run_e() {
   for LAMBDA in 0.01 0.1 1.0; do
-    echo "========== Exp E: Lambda=$LAMBDA =========="
+    local N=$(name "exp_e_lambda_${LAMBDA}")
+    echo "========== Exp E: Lambda=$LAMBDA → $N =========="
     run_train \
       model.train_preference_head=false \
       model.progress_use_sigmoid=false \
@@ -177,8 +188,8 @@ run_e() {
       loss.struct_loss_enabled=true \
       loss.struct_loss_type=entropy \
       loss.struct_lambda=$LAMBDA \
-      training.output_dir=./logs/exp_e_lambda_${LAMBDA} \
-      training.exp_name=exp_e_lambda_${LAMBDA} \
+      training.output_dir=./logs/$N \
+      training.exp_name=$N \
       "logging.log_to=[tensorboard]"
   done
 }
@@ -202,7 +213,7 @@ case "$EXP" in
     ;;
   *)
     echo "Unknown experiment: $EXP"
-    echo "Usage: bash run_all_exp.sh <dry_run|a|b|c|d|e|all>"
+    echo "Usage: bash run_all_exp.sh <dry_run|a|b|c|d|e|all> [suffix]"
     exit 1
     ;;
 esac

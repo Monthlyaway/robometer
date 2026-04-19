@@ -4,6 +4,41 @@
 
 ---
 
+## 数据与模型总览
+
+```
+/root/autodl-tmp/
+├── raw_datasets/                              # ROBOMETER_DATASET_PATH
+│   ├── libero_rfm/                            # abraranwar/libero_rfm (HF 下载)
+│   │   ├── libero256_10/                      # 训练: 388 条成功轨迹
+│   │   ├── libero256_object/                  # 训练: 456 条成功轨迹
+│   │   ├── libero256_spatial/                 # 训练: 433 条成功轨迹
+│   │   ├── libero256_goal/                    # 训练: 456 条成功轨迹
+│   │   └── libero256_90/                      # 评估: ~8000 条成功轨迹
+│   └── libero_failure_rfm/                    # ykorkmaz/libero_failure_rfm (HF 下载)
+│       ├── libero_10_failure/                 # 训练: 498 条失败轨迹
+│       ├── libero_object_failure/             # 训练: 490 条失败轨迹
+│       ├── libero_spatial_failure/            # 训练: 486 条失败轨迹
+│       ├── libero_goal_failure/               # 训练: 456 条失败轨迹
+│       └── libero_90_failure/                 # 评估: 失败轨迹
+├── processed_datasets/                        # ROBOMETER_PROCESSED_DATASETS_PATH
+│   ├── abraranwar_libero_rfm_libero256_10/    # 预处理后 (frames/ + index)
+│   ├── abraranwar_libero_rfm_libero256_object/
+│   ├── abraranwar_libero_rfm_libero256_spatial/
+│   ├── abraranwar_libero_rfm_libero256_goal/
+│   ├── abraranwar_libero_rfm_libero256_90/
+│   ├── ykorkmaz_libero_failure_rfm_libero_10_failure/
+│   ├── ykorkmaz_libero_failure_rfm_libero_object_failure/
+│   ├── ykorkmaz_libero_failure_rfm_libero_spatial_failure/
+│   ├── ykorkmaz_libero_failure_rfm_libero_goal_failure/
+│   └── ykorkmaz_libero_failure_rfm_libero_90_failure/
+└── .cache/huggingface/hub/                    # HF_HOME (模型缓存)
+    ├── models--Qwen--Qwen3-VL-4B-Instruct/
+    └── models--robometer--Robometer-4B/
+```
+
+---
+
 ## Part 0: Environment and Infrastructure
 
 ### 0.1 Python + uv 安装
@@ -243,7 +278,7 @@ uv run huggingface-cli download Qwen/Qwen3-VL-4B-Instruct
 uv run huggingface-cli download robometer/Robometer-4B
 ```
 
-> HF 模型会缓存到 `~/.cache/huggingface/hub/`。
+> HF 模型会缓存到 `/root/autodl-tmp/.cache/huggingface/hub/`。
 > 如果磁盘空间不足, 可以用 `--local-dir` 指定路径, 然后在训练命令中用本地路径。
 
 ### 1.6 验证数据加载

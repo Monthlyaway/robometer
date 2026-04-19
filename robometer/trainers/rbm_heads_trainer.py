@@ -684,6 +684,10 @@ class RBMHeadsTrainer(Trainer):
             for key in log_global:
                 logger.info(f"  {key}: {log_global[key]}")
 
+            for key in sorted(log_metadata):
+                if "loss" in key or "acc" in key or "corr" in key:
+                    logger.info(f"  {key}: {log_metadata[key]:.6f}")
+
             rounded_times = {k: round(v, 2) for k, v in self.timing_raw.items()}
             logger.info(f"Timing raw: {rounded_times}")
 

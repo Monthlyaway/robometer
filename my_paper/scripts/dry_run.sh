@@ -1,12 +1,19 @@
 #!/bin/bash
-# Dry-run: verify L_struct implementation works (10 steps, small batch)
-# Expected: train/struct_loss appears in logs, no crashes, finite values
+# Dry-run: verify L_struct implementation works (10 steps)
+# Expected: train/struct_loss appears in console logs, no crashes
 set -e
 
 cd /root/autodl-tmp/robometer
+source .venv/bin/activate
+
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
+export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
 
 echo "=== Dry Run: BT + L_struct (entropy) ==="
-uv run accelerate launch \
+accelerate launch \
   --config_file robometer/configs/distributed/fsdp.yaml \
   --num_processes=1 \
   train.py \
@@ -16,9 +23,9 @@ uv run accelerate launch \
   model.train_preference_head=true \
   model.train_success_head=false \
   data.train_datasets=[libero_pi0] \
-  data.eval_datasets=[libero_pi0] \
+  data.eval_datasets=[libero] \
   data.max_frames=8 \
-  data.sample_type_ratio=[1,0,0] \
+  "data.sample_type_ratio=[1,0,0]" \
   training.per_device_train_batch_size=2 \
   training.learning_rate=2e-5 \
   training.max_steps=10 \
@@ -31,4 +38,4 @@ uv run accelerate launch \
   training.output_dir=./logs/dry_run_entropy \
   training.exp_name=dry_run_entropy \
   training.overwrite_output_dir=True \
-  logging.log_to=[]
+  "logging.log_to=[]"

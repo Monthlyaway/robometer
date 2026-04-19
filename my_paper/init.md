@@ -8,3 +8,11 @@ experiment-design-v2.md 是我打算要做的实验
 当前进度：
 - python环境，数据 preprocess, 模型下载完成
 - Dry run 通过
+- unsloth 下的模型文件是从huggginface cache里的对应地方链接过来的
+
+bashrc 中的内容：
+
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HOME=/root/autodl-tmp/.cache/huggingface
+export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
+export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets

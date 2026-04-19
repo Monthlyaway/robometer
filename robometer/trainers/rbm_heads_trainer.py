@@ -2471,12 +2471,21 @@ class RBMHeadsTrainer(Trainer):
         if progress.dim() == 1:
             progress = progress.unsqueeze(0)
 
-        delta_t = progress[:, 1:] - progress[:, :-1]
+        # Build per-delta mask: both adjacent frames must be valid.
+        # mask may arrive as [B,T,1], [B,T], [B,1], or [B] depending on
+        # whether supervised progress is active; fall back to all-ones.
+        m = mask.squeeze(-1) if mask.dim() == 3 else mask
+        T = progress.shape[1]
+        if m.dim() < 2 or m.shape[-1] != T:
+            m = torch.ones(progress.shape[0], T, device=progress.device)
+        delta_mask = (m[:, 1:] * m[:, :-1]).float()  # [B, T-1]
+
+        delta_t = progress[:, 1:] - progress[:, :-1]  # [B, T-1]
 
         if loss_type == "l2_smooth":
-            struct_loss = (delta_t ** 2).mean()
+            struct_loss = (delta_t ** 2 * delta_mask).sum() / delta_mask.sum().clamp(min=1)
         else:
-            delta_pos = F.softplus(delta_t)
+            delta_pos = F.softplus(delta_t) * delta_mask
             p_t = delta_pos / (delta_pos.sum(dim=-1, keepdim=True) + 1e-8)
             struct_loss = (p_t * torch.log(p_t + 1e-8)).sum(dim=-1).mean()
 
@@ -2529,8 +2538,8 @@ class RBMHeadsTrainer(Trainer):
         target_progress_A = inputs["target_progress_A"]
         target_progress_A_mask = inputs["target_progress_A_mask"].unsqueeze(-1)
         data_gen_strat = inputs["trajectory_A_data_gen_strategy"]
-        logger.warning(f"DATA GEN STRAT FOR TRAJ A: {data_gen_strat}")
-        logger.warning(f"DATA SOURCE FOR TRAJ A: {inputs['trajectory_A_data_source']}")
+        logger.debug(f"DATA GEN STRAT FOR TRAJ A: {data_gen_strat}")
+        logger.debug(f"DATA SOURCE FOR TRAJ A: {inputs['trajectory_A_data_source']}")
         # logger.warning(f"PREFERENCE LABELS: {inputs['preference_labels']}")
 
         if self.config.model.train_progress_head and self.config.training.predict_pref_progress:

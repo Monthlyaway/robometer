@@ -55,12 +55,21 @@ def _compute_struct_loss(self, progress_pred, mask, training=True):
     if progress.dim() == 1:
         progress = progress.unsqueeze(0)
 
+    # Build per-delta mask: both adjacent frames must be valid.
+    # mask may arrive as [B,T,1], [B,T], [B,1], or [B] depending on
+    # whether supervised progress is active; fall back to all-ones.
+    m = mask.squeeze(-1) if mask.dim() == 3 else mask
+    T = progress.shape[1]
+    if m.dim() < 2 or m.shape[-1] != T:
+        m = torch.ones(progress.shape[0], T, device=progress.device)
+    delta_mask = (m[:, 1:] * m[:, :-1]).float()  # [B, T-1]
+
     delta_t = progress[:, 1:] - progress[:, :-1]  # [B, T-1]
 
     if loss_type == "l2_smooth":
-        struct_loss = (delta_t ** 2).mean()
+        struct_loss = (delta_t ** 2 * delta_mask).sum() / delta_mask.sum().clamp(min=1)
     else:  # entropy
-        delta_pos = F.softplus(delta_t)
+        delta_pos = F.softplus(delta_t) * delta_mask
         p_t = delta_pos / (delta_pos.sum(dim=-1, keepdim=True) + 1e-8)
         struct_loss = (p_t * torch.log(p_t + 1e-8)).sum(dim=-1).mean()
 
@@ -120,12 +129,19 @@ if num_preferences > 0 and preference_inputs and _run_pref:
 | `robometer/utils/setup_utils.py:1093` | `save_safetensors: True` → `False` | Unsloth+LoRA shared tensor 保存报错 |
 | `robometer/trainers/rbm_heads_trainer.py:687-689` | 新增 loss/acc/corr 的控制台打印 | 原始代码只打印 counts 和 timing |
 | `robometer/data/scripts/preprocess_datasets.py:889-896` | 优先从本地 parquet 加载 | 避免离线环境下 HF 网络超时 |
+| `robometer/trainers/rbm_heads_trainer.py:_compute_struct_loss` | 加入 delta_mask 过滤 padding 帧 | 原实现忽略 mask，padding 帧的 delta 会污染 struct loss |
+| `robometer/trainers/rbm_heads_trainer.py:2532-2533` | `logger.warning` → `logger.debug` | 每 batch 打印 data_gen_strategy 会刷屏日志 |
 
 ---
 
 ## Part 2: Experiments
 
-所有实验使用 LIBERO 数据集，Qwen3-VL-4B + LoRA，单 GPU。
+所有实验使用 LIBERO 数据集，Qwen3-VL-2B-Instruct + LoRA，单 GPU，不使用 Unsloth。
+
+> **模型选择**: 2B vs 4B 实测对比 (RTX 4080S, batch_size=2):
+> - 4B + Unsloth: ~17.5s/step (backward 瓶颈)
+> - 2B + Unsloth: ~2.75s/step (Unsloth 反而增加开销)
+> - **2B 原生: ~0.47s/step** ← 采用此配置
 
 ### 架构设计
 
@@ -138,10 +154,54 @@ if num_preferences > 0 and preference_inputs and _run_pref:
 
 A-C 共享相同架构（仅 progress head），D 使用原始 Robometer 架构（preference head + 有监督 progress head）。
 
-### 一键运行
+### 运行方式
 
 ```bash
-bash my_paper/scripts/run_all_exp.sh
+bash my_paper/scripts/run_all_exp.sh <experiment>
+# <experiment> = dry_run | a | b | c | d | e | all
+#
+# 示例:
+#   bash my_paper/scripts/run_all_exp.sh dry_run   # 5步冒烟测试 (~10s)
+#   bash my_paper/scripts/run_all_exp.sh c          # 只跑 Exp C (our method)
+#   bash my_paper/scripts/run_all_exp.sh all        # A-D 顺序执行
+```
+
+### Dry Run（冒烟测试）
+
+验证模型加载 + 训练循环 + loss 正常的最小运行。已验证通过。
+
+```bash
+cd /root/autodl-tmp/robometer && source .venv/bin/activate
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+export HF_HOME=/root/autodl-tmp/.cache/huggingface
+export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
+export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
+
+accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1 \
+  train.py \
+  model.base_model_id=Qwen/Qwen3-VL-2B-Instruct \
+  model.use_unsloth=false \
+  model.use_peft=true \
+  model.train_progress_head=true \
+  model.train_preference_head=true \
+  model.train_success_head=false \
+  data.train_datasets=[libero_pi0] \
+  data.eval_datasets=[libero_pi0] \
+  data.max_frames=8 \
+  "data.sample_type_ratio=[1,0,0]" \
+  training.per_device_train_batch_size=2 \
+  training.learning_rate=2e-5 \
+  training.max_steps=5 \
+  training.do_eval=false \
+  training.evaluation_strategy=no \
+  loss.struct_loss_enabled=true \
+  loss.struct_loss_type=entropy \
+  loss.struct_lambda=0.1 \
+  loss.progress_loss_type=l2 \
+  training.output_dir=./logs/dry_run \
+  training.exp_name=dry_run \
+  training.overwrite_output_dir=True \
+  "logging.log_to=[]"
 ```
 
 ### 通用基础参数
@@ -151,6 +211,7 @@ source /root/autodl-tmp/robometer/.venv/bin/activate
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
+export HF_HOME=/root/autodl-tmp/.cache/huggingface
 export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
 export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
 cd /root/autodl-tmp/robometer
@@ -158,27 +219,30 @@ cd /root/autodl-tmp/robometer
 
 ```bash
 BASE_ARGS="
-  model.base_model_id=Qwen/Qwen3-VL-4B-Instruct
+  model.base_model_id=Qwen/Qwen3-VL-2B-Instruct
+  model.use_unsloth=false
   model.use_peft=true
   model.train_progress_head=true
   model.train_success_head=false
   data.train_datasets=[libero_pi0]
-  data.eval_datasets=[libero]
+  data.eval_datasets=[libero_pi0]
   data.max_frames=8
   training.per_device_train_batch_size=2
-  training.gradient_accumulation_steps=4
+  training.gradient_accumulation_steps=1
   training.learning_rate=2e-5
-  training.num_train_epochs=2
-  training.eval_steps=200
-  training.custom_eval_steps=200
-  training.save_steps=200
-  training.logging_steps=10
+  training.max_steps=10000
+  training.do_eval=false
+  training.evaluation_strategy=no
+  training.save_steps=2000
+  training.logging_steps=50
 "
 ```
 
 注意:
-- `data.eval_datasets=[libero]` 而非 `[libero_pi0]`（后者含嵌套列表会报错）
+- `model.use_unsloth=false`: 2B 模型下 Unsloth 反而更慢，不使用
+- `training.do_eval=false training.evaluation_strategy=no`: `libero_pi0` eval split 含嵌套列表导致 dataset loader 报错，训练期间跳过 eval，训练后用独立脚本评估
 - A-C: `train_preference_head=false`，D: `train_preference_head=true`
+- A-C: `loss.progress_loss_type=l2`（连续输出，适合势函数），D 沿用 yaml 默认 `discrete`
 
 ---
 
@@ -187,21 +251,10 @@ BASE_ARGS="
 论文对应: Table 1 Row A — 展示 monotonicity trap
 
 ```bash
-accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1 \
-  train.py $BASE_ARGS \
-  model.train_preference_head=false \
-  "data.sample_type_ratio=[1,0,0]" \
-  training.predict_pref_progress=false \
-  loss.pref_loss_type=bt_sum \
-  loss.struct_loss_enabled=false \
-  training.output_dir=./logs/exp_a_pure_bt \
-  training.exp_name=exp_a_pure_bt \
-  "logging.log_to=[tensorboard]"
+bash my_paper/scripts/run_all_exp.sh a
 ```
 
-### Exp B: BT + L2 Smooth（naive 正则 baseline）
-
-论文对应: Table 1 Row B — L2 temporal smoothing 不够
+<details><summary>完整命令</summary>
 
 ```bash
 accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1 \
@@ -210,6 +263,33 @@ accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_pr
   "data.sample_type_ratio=[1,0,0]" \
   training.predict_pref_progress=false \
   loss.pref_loss_type=bt_sum \
+  loss.progress_loss_type=l2 \
+  loss.struct_loss_enabled=false \
+  training.output_dir=./logs/exp_a_pure_bt \
+  training.exp_name=exp_a_pure_bt \
+  "logging.log_to=[tensorboard]"
+```
+
+</details>
+
+### Exp B: BT + L2 Smooth（naive 正则 baseline）
+
+论文对应: Table 1 Row B — L2 temporal smoothing 不够
+
+```bash
+bash my_paper/scripts/run_all_exp.sh b
+```
+
+<details><summary>完整命令</summary>
+
+```bash
+accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1 \
+  train.py $BASE_ARGS \
+  model.train_preference_head=false \
+  "data.sample_type_ratio=[1,0,0]" \
+  training.predict_pref_progress=false \
+  loss.pref_loss_type=bt_sum \
+  loss.progress_loss_type=l2 \
   loss.struct_loss_enabled=true \
   loss.struct_loss_type=l2_smooth \
   loss.struct_lambda=0.1 \
@@ -218,9 +298,17 @@ accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_pr
   "logging.log_to=[tensorboard]"
 ```
 
+</details>
+
 ### Exp C: BT + Entropy Prior（本文方法）
 
 论文对应: Table 1 Row C — Maximum Entropy Increment Prior，**本文核心贡献**
+
+```bash
+bash my_paper/scripts/run_all_exp.sh c
+```
+
+<details><summary>完整命令</summary>
 
 ```bash
 accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1 \
@@ -229,6 +317,7 @@ accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_pr
   "data.sample_type_ratio=[1,0,0]" \
   training.predict_pref_progress=false \
   loss.pref_loss_type=bt_sum \
+  loss.progress_loss_type=l2 \
   loss.struct_loss_enabled=true \
   loss.struct_loss_type=entropy \
   loss.struct_lambda=0.1 \
@@ -237,9 +326,17 @@ accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_pr
   "logging.log_to=[tensorboard]"
 ```
 
+</details>
+
 ### Exp D: Full Robometer（有监督 oracle 上界）
 
 论文对应: Table 1 Row D — 使用 preference head + 有监督 progress labels
+
+```bash
+bash my_paper/scripts/run_all_exp.sh d
+```
+
+<details><summary>完整命令</summary>
 
 ```bash
 accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1 \
@@ -254,9 +351,17 @@ accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_pr
   "logging.log_to=[tensorboard]"
 ```
 
+</details>
+
 ### Exp E: Lambda 敏感性
 
 论文对应: Section 5.3 超参数分析
+
+```bash
+bash my_paper/scripts/run_all_exp.sh e
+```
+
+<details><summary>完整命令</summary>
 
 ```bash
 for LAMBDA in 0.01 0.1 1.0; do
@@ -266,6 +371,7 @@ for LAMBDA in 0.01 0.1 1.0; do
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=false \
     loss.pref_loss_type=bt_sum \
+    loss.progress_loss_type=l2 \
     loss.struct_loss_enabled=true \
     loss.struct_loss_type=entropy \
     loss.struct_lambda=$LAMBDA \
@@ -274,6 +380,8 @@ for LAMBDA in 0.01 0.1 1.0; do
     "logging.log_to=[tensorboard]"
 done
 ```
+
+</details>
 
 预期: lambda=0.1 附近效果最好，0.01 退化为 Pure BT，1.0 过度约束。
 
@@ -284,10 +392,8 @@ done
 ### TensorBoard
 
 ```bash
-tensorboard --logdir ./logs --bind_all --port 6006
+tensorboard --logdir ./logs
 ```
-
-AutoDL 端口映射或 SSH 隧道: `ssh -L 6006:localhost:6006 root@<地址>`，浏览器打开 `http://localhost:6006`。
 
 关键 metrics:
 
@@ -357,10 +463,13 @@ python robometer/evals/run_baseline_eval.py \
 
 ### 时间估算
 
-| 实验 | 模型数 | 预估时间 (RTX 4080S) |
-|------|--------|---------------------|
-| Exp A-D: Core Ablation | 4 | ~8-12h 总计 |
-| Exp E: Lambda Sweep | 3 | ~6-9h |
+2B 原生 (无 Unsloth): ~0.47s/step, RTX 4080S
+
+| 实验 | 模型数 | 预估时间 |
+|------|--------|---------|
+| Dry run (5 steps) | 1 | ~10s |
+| Exp A-D: Core Ablation | 4 | ~6h 总计 (~1.5h/run) |
+| Exp E: Lambda Sweep | 3 | ~4.5h |
 | Eval (独立) | - | ~15min/checkpoint |
 
 建议优先级: **Exp A-D** → Exp E → 可视化脚本
@@ -371,9 +480,12 @@ python robometer/evals/run_baseline_eval.py \
 
 - [x] 环境安装成功
 - [x] LIBERO 数据集下载并预处理完成 (10/10)
-- [x] 模型缓存就绪 (Qwen3-VL-4B)
+- [x] 模型缓存就绪 (Qwen3-VL-2B-Instruct + Qwen3-VL-4B-Instruct)
 - [x] 代码修改完成 (configs + trainer + utils + Route B bt_sum)
-- [x] Dry run 成功 (bt_sum 模式: preference_loss + struct_loss 均正常)
+- [x] struct_loss mask bug 修复 + logger.warning 降级为 debug
+- [x] 实验命令修正 (custom_eval 指向 libero_pi0; Exp A-C 设 progress_loss_type=l2)
+- [x] 2B 模型速度对比: 原生 0.47s/step >> Unsloth 2.75s/step >> 4B 17.5s/step
+- [x] Dry run 成功 (2B 原生, bt_sum 模式: preference_loss + struct_loss 均正常)
 - [ ] Exp A-D 训练完成
 - [ ] Exp E lambda sweep 完成
 - [ ] Table 1 填写

@@ -48,18 +48,29 @@ BASE_ARGS="
   training.evaluation_strategy=no
   training.save_steps=2000
   training.logging_steps=50
+  custom_eval.reward_alignment=[libero_pi0]
+  custom_eval.policy_ranking=[libero_pi0]
 "
+EVAL_TYPES_ARG="custom_eval.eval_types=[policy_ranking,reward_alignment]"
 
 LAUNCH="accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1"
 
+run_train() {
+  $LAUNCH train.py $BASE_ARGS "$EVAL_TYPES_ARG" "$@"
+}
+
 # ------------------------------------------------------------------
 run_dry_run() {
-  echo "========== Dry Run (5 steps) =========="
-  $LAUNCH train.py $BASE_ARGS \
+  echo "========== Dry Run (5 steps + eval) =========="
+  run_train \
     model.train_preference_head=true \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=false \
     training.max_steps=5 \
+    training.do_eval=true \
+    training.evaluation_strategy=steps \
+    training.eval_steps=5 \
+    training.custom_eval_steps=5 \
     loss.struct_loss_enabled=true \
     loss.struct_loss_type=entropy \
     loss.struct_lambda=0.1 \
@@ -76,7 +87,7 @@ run_dry_run() {
 # ------------------------------------------------------------------
 run_a() {
   echo "========== Exp A: Pure BT =========="
-  $LAUNCH train.py $BASE_ARGS \
+  run_train \
     model.train_preference_head=false \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=false \
@@ -94,7 +105,7 @@ run_a() {
 # ------------------------------------------------------------------
 run_b() {
   echo "========== Exp B: BT + L2 Smooth =========="
-  $LAUNCH train.py $BASE_ARGS \
+  run_train \
     model.train_preference_head=false \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=false \
@@ -114,7 +125,7 @@ run_b() {
 # ------------------------------------------------------------------
 run_c() {
   echo "========== Exp C: BT + Entropy (Ours) =========="
-  $LAUNCH train.py $BASE_ARGS \
+  run_train \
     model.train_preference_head=false \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=false \
@@ -134,7 +145,7 @@ run_c() {
 # ------------------------------------------------------------------
 run_d() {
   echo "========== Exp D: Full Robometer =========="
-  $LAUNCH train.py $BASE_ARGS \
+  run_train \
     model.train_preference_head=true \
     "data.sample_type_ratio=[1,0,0]" \
     training.predict_pref_progress=true \
@@ -152,7 +163,7 @@ run_d() {
 run_e() {
   for LAMBDA in 0.01 0.1 1.0; do
     echo "========== Exp E: Lambda=$LAMBDA =========="
-    $LAUNCH train.py $BASE_ARGS \
+    run_train \
       model.train_preference_head=false \
       "data.sample_type_ratio=[1,0,0]" \
       training.predict_pref_progress=false \

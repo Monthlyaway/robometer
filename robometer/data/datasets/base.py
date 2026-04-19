@@ -189,8 +189,15 @@ class BaseDataset(torch.utils.data.Dataset):
         available_datasets = []
         missing_datasets = []
 
-        for dataset_path in self.datasets:
-            # The preprocessing script creates individual cache directories for each dataset
+        # Flatten nested lists (e.g. libero_pi0 eval has paired dataset groups)
+        flat_datasets = []
+        for item in self.datasets:
+            if isinstance(item, list):
+                flat_datasets.extend(item)
+            else:
+                flat_datasets.append(item)
+
+        for dataset_path in flat_datasets:
             individual_cache_dir = os.path.join(cache_dir, dataset_path.replace("/", "_").replace(":", "_"))
 
             if os.path.exists(individual_cache_dir):

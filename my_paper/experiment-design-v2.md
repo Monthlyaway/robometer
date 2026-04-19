@@ -168,41 +168,13 @@ bash my_paper/scripts/run_all_exp.sh <experiment>
 
 ### Dry Run（冒烟测试）
 
-验证模型加载 + 训练循环 + loss 正常的最小运行。已验证通过。
+验证模型加载 + 训练循环 + loss + eval 全流程。已验证通过。
 
 ```bash
-cd /root/autodl-tmp/robometer && source .venv/bin/activate
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
-export HF_HOME=/root/autodl-tmp/.cache/huggingface
-export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
-export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
-
-accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1 \
-  train.py \
-  model.base_model_id=Qwen/Qwen3-VL-2B-Instruct \
-  model.use_unsloth=false \
-  model.use_peft=true \
-  model.train_progress_head=true \
-  model.train_preference_head=true \
-  model.train_success_head=false \
-  data.train_datasets=[libero_pi0] \
-  data.eval_datasets=[libero_pi0] \
-  data.max_frames=8 \
-  "data.sample_type_ratio=[1,0,0]" \
-  training.per_device_train_batch_size=2 \
-  training.learning_rate=2e-5 \
-  training.max_steps=5 \
-  training.do_eval=false \
-  training.evaluation_strategy=no \
-  loss.struct_loss_enabled=true \
-  loss.struct_loss_type=entropy \
-  loss.struct_lambda=0.1 \
-  loss.progress_loss_type=l2 \
-  training.output_dir=./logs/dry_run \
-  training.exp_name=dry_run \
-  training.overwrite_output_dir=True \
-  "logging.log_to=[]"
+bash my_paper/scripts/run_all_exp.sh dry_run
 ```
+
+5 步训练 + 1 轮 custom eval（reward_alignment / policy_ranking / confusion_matrix），约 3-4 分钟。
 
 ### 通用基础参数
 
@@ -235,12 +207,18 @@ BASE_ARGS="
   training.evaluation_strategy=no
   training.save_steps=2000
   training.logging_steps=50
+  custom_eval.reward_alignment=[libero_pi0]
+  custom_eval.policy_ranking=[libero_pi0]
 "
+# 含逗号的 Hydra list 参数需要在 shell 中单独用引号传递，不能放在 BASE_ARGS 里:
+EVAL_TYPES_ARG="custom_eval.eval_types=[policy_ranking,reward_alignment]"
 ```
 
 注意:
 - `model.use_unsloth=false`: 2B 模型下 Unsloth 反而更慢，不使用
-- `training.do_eval=false training.evaluation_strategy=no`: `libero_pi0` eval split 含嵌套列表导致 dataset loader 报错，训练期间跳过 eval，训练后用独立脚本评估
+- `training.do_eval=false training.evaluation_strategy=no`: 训练期间跳过 eval 节省时间，eval 在 dry run 中已验证可用
+- `custom_eval.*=[libero_pi0]`: 必须显式覆盖，默认值 `mw`（MetaWorld）无预处理数据
+- `custom_eval.eval_types` 去掉 `confusion_matrix`（它走 HF hub 下载原始数据，离线模式不可用）
 - A-C: `train_preference_head=false`，D: `train_preference_head=true`
 - A-C: `loss.progress_loss_type=l2`（连续输出，适合势函数），D 沿用 yaml 默认 `discrete`
 

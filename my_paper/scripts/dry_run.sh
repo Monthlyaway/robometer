@@ -38,4 +38,4 @@ accelerate launch \
   training.output_dir=./logs/dry_run_entropy \
   training.exp_name=dry_run_entropy \
   training.overwrite_output_dir=True \
-  "logging.log_to=[]"
+  "logging.log_to=[tensorboard]"

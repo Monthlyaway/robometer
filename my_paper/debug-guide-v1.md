@@ -40,8 +40,7 @@ BASE_ARGS="
   training.save_steps=200
   training.predict_pref_progress=false
   training.logging_steps=10
-  logging.log_to=[wandb]
-  logging.wandb_project=thesis_experiments
+  logging.log_to=[tensorboard]
 "
 ```
 
@@ -108,14 +107,18 @@ done
 
 ## 查看结果
 
-### WandB
+### TensorBoard
 
-项目 `thesis_experiments`，每次实验以 `exp_name` 命名。
+```bash
+tensorboard --logdir ./logs --bind_all --port 6006
+```
+
+AutoDL: SSH 隧道 `ssh -L 6006:localhost:6006 root@<地址>`，浏览器 `http://localhost:6006`
 
 关键 metrics:
 
-| Metric | 含义 |
-|--------|------|
+| Tag | 含义 |
+|-----|------|
 | `train/pref_bt_loss` | Bradley-Terry 偏好损失 |
 | `train/struct_loss` | 结构正则损失 (仅 Exp 3/4) |
 | `eval_p_rank/voc_r_*` | VOC r (Pearson correlation) |
@@ -129,13 +132,14 @@ ls ./logs/exp4_entropy/
 # trainer_state.json   → loss 历史
 # checkpoint-*/        → 模型权重
 # eval_results_*.json  → 评估指标
+# runs/                → TensorBoard 事件文件
 ```
 
 ### 论文占位符映射
 
 | 论文占位符 | 数据来源 |
 |-----------|---------|
-| Table 1: VOC r / Kendall τ / Suc-Fail Diff | WandB 或 `eval_results_*.json` |
+| Table 1: VOC r / Kendall τ / Suc-Fail Diff | TensorBoard 或 `eval_results_*.json` |
 | Fig 1: 势函数曲线 | 训练后推理脚本 (加载 checkpoint，对 eval 轨迹逐帧 predict progress) |
 | Fig 2: 增量分布直方图 | 同上，计算相邻帧 progress 差值分布 |
 | Fig/Table 3: λ 敏感性 | Lambda 敏感性实验的 VOC r / Kendall τ 汇总 |

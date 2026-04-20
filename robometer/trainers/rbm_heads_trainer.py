@@ -452,8 +452,7 @@ class RBMHeadsTrainer(Trainer):
             except Exception as e:
                 logger.warning(f"Error logging metadata: {e}")
 
-        # Log GPU memory usage at every training step for diagnostics
-        log_memory_usage(f"Step {self.state.global_step}")
+        # log_memory_usage — disabled for throughput (was called every step)
 
         return loss
 
@@ -1917,10 +1916,6 @@ class RBMHeadsTrainer(Trainer):
                             f"Trajectory {i} has quality_label='{quality_label}' but success_labels are not all 0s. "
                             f"Found non-zero labels: {(sample_success_labels != 0.0).sum().item()} out of {len(sample_success_labels)}"
                         )
-                        import ipdb
-
-                        ipdb.set_trace()
-
                     # Include all frames for this trajectory in the mask
                     quality_mask[i, :] = 1.0
 
@@ -2375,10 +2370,6 @@ class RBMHeadsTrainer(Trainer):
 
         # Check for NaN in final loss
         if torch.isnan(final_loss).any():
-            if training:
-                import ipdb
-
-                ipdb.set_trace()
             logger.warning(f"NaN detected in progress loss, replacing with 0.0")
             final_loss = torch.tensor(0.0, device=final_loss.device, dtype=final_loss.dtype)
 

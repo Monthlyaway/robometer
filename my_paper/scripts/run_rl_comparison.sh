@@ -23,12 +23,14 @@
 set -e
 cd /root/autodl-tmp/robometer
 source .venv/bin/activate
+export MUJOCO_GL=egl
+export HF_HUB_OFFLINE=1
 
 MODE="${1:-full}"
 
 # Checkpoint paths (update after training completes)
-EXP_A_CKPT="./logs/exp_a_pure_bt/exp_a_pure_bt/checkpoint-1250"
-EXP_C_CKPT="./logs/exp_c_entropy/exp_c_entropy/checkpoint-1250"
+EXP_A_CKPT="./logs/exp_a_pure_bt_round3a/exp_a_pure_bt_round3a/checkpoint-2500"
+EXP_C_CKPT="./logs/exp_c_entropy_round3a/exp_c_entropy_round3a/checkpoint-2500"
 
 OUTPUT_DIR="./logs/rl_eval"
 

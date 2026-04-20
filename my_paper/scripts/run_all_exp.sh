@@ -14,10 +14,10 @@
 #   bash my_paper/scripts/run_all_exp.sh all v2          # → logs/exp_a_pure_bt_v2/ etc.
 #   bash my_paper/scripts/run_all_exp.sh e sweep1        # → logs/exp_e_lambda_0.01_sweep1/ etc.
 #
-# Timing: ~0.5s/step on RTX 4080S with 2B model.
+# Timing: ~1.7s/step on RTX 4080S with 2B model, batch=8, no FSDP.
 #   dry_run (5 steps): ~10s
-#   Single experiment (1250 steps): ~70min
-#   All A-D: ~2.5h
+#   Single experiment (2500 steps): ~70min
+#   All A-D: ~5h
 set -e
 
 EXP="${1:?Usage: bash run_all_exp.sh <dry_run|a|b|c|d|e|all> [suffix]}"
@@ -42,10 +42,10 @@ BASE_ARGS="
   data.train_datasets=[libero_pi0]
   data.eval_datasets=[libero_pi0]
   data.max_frames=8
-  training.per_device_train_batch_size=16
+  training.per_device_train_batch_size=8
   training.gradient_accumulation_steps=1
-  training.learning_rate=2e-5
-  training.max_steps=1250
+  training.learning_rate=4e-5
+  training.max_steps=2500
   training.do_eval=false
   training.evaluation_strategy=no
   training.save_strategy=steps
@@ -56,7 +56,7 @@ BASE_ARGS="
 "
 EVAL_TYPES_ARG="custom_eval.eval_types=[policy_ranking,reward_alignment]"
 
-LAUNCH="accelerate launch --config_file robometer/configs/distributed/fsdp.yaml --num_processes=1"
+LAUNCH="accelerate launch --config_file robometer/configs/distributed/no_fsdp.yaml --num_processes=1"
 
 # Append _$SUFFIX to a base name if SUFFIX is set
 name() { if [ -n "$SUFFIX" ]; then echo "${1}_${SUFFIX}"; else echo "$1"; fi; }

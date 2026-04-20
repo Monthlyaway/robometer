@@ -506,9 +506,289 @@ Policy Ranking (libero_90 only):
   3. 移除 ipdb breakpoints
 - 验证: Loaded 392/392 adapter keys ✓
 
+---
+
+## Round: SmolVLM-500M 全参微调 (2026-04-20)
+
+### 背景
+
+Qwen3-VL-2B 的 RL 推理太慢 (~0.5s/step forward)，全链路跑通但无法实际使用。
+切换到 **HuggingFaceTB/SmolVLM-500M-Instruct** (0.5B 参数)，代码中已有 SmolVLM 支持路径。
+
+### 代码变更
+
+1. **`robometer/utils/setup_utils.py`**:
+   - SmolVLM 跳过 `setup_model_and_processor` 中的全模型 PEFT（之前 74% 参数可训，应为 ~5%），改为在 `setup_peft_model` 中只对 `text_model` 加 LoRA
+   - SmolVLM 图像分辨率 512→384（减少 44% 像素）
+   - `setup_peft_model` 增加 SmolVLM 的 `text_model` 属性路径分发
+
+2. **`my_paper/scripts/run_all_exp.sh`**:
+   - `model.base_model_id` → `HuggingFaceTB/SmolVLM-500M-Instruct`
+   - `training.per_device_train_batch_size` → 16
+
+### 速度对比
+
+| 配置 | 每步时间 | samples/s | 瓶颈 |
+|------|---------|-----------|------|
+| Qwen3-VL-2B + LoRA (旧) | ~1.7s | — | VLM forward |
+| SmolVLM-500M + LoRA (MP4 collator) | ~4.3s | 0.17 | **dataloader: MP4 编解码** |
+| SmolVLM-500M heads-only (MP4) | ~3.1s | 0.34 | dataloader |
+| SmolVLM-500M 全参 + multi_image | **~3.4s** | **1.5** | 正常水平 |
+
+**关键发现**: SmolVLM 的 collator 把每个样本的帧写成 MP4 再让 processor 读回来，是速度瓶颈 (90% 时间)。
+用 `data.use_multi_image=true` 直接传 PIL 图片绕过 MP4，speed up ~4.5x。
+
+### Dry Run 命令
+
+```bash
+cd /root/autodl-tmp/robometer
+source .venv/bin/activate
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+export HF_HOME=/root/autodl-tmp/.cache/huggingface
+export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
+export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
+
+# Dry run (5 步冒烟测试)
+accelerate launch --config_file robometer/configs/distributed/no_fsdp.yaml --num_processes=1 train.py \
+  model.base_model_id=HuggingFaceTB/SmolVLM-500M-Instruct \
+  model.use_unsloth=false model.use_peft=false \
+  model.train_progress_head=true model.train_success_head=false \
+  model.train_preference_head=true \
+  model.train_vision_encoder=false model.train_language_model=true \
+  data.train_datasets=[libero_pi0] data.eval_datasets=[libero_pi0] \
+  data.max_frames=8 data.use_multi_image=true \
+  training.per_device_train_batch_size=16 training.gradient_accumulation_steps=1 \
+  training.learning_rate=4e-5 training.max_steps=5 \
+  training.do_eval=true training.evaluation_strategy=steps training.eval_steps=5 \
+  training.custom_eval_steps=5 training.save_strategy=no training.logging_steps=5 \
+  "data.sample_type_ratio=[1,0,0]" training.predict_pref_progress=true \
+  loss.pref_loss_type=head loss.struct_loss_enabled=false \
+  training.output_dir=./logs/dry_run_smolvlm training.exp_name=dry_run_smolvlm \
+  training.overwrite_output_dir=True "logging.log_to=[]" \
+  "custom_eval.eval_types=[policy_ranking,reward_alignment]" \
+  custom_eval.reward_alignment=[libero_pi0] custom_eval.policy_ranking=[libero_pi0]
+```
+
+### 正式实验命令
+
+```bash
+# Exp D: Full Robometer (SmolVLM-500M, 全参微调, 2000步, ~1.9h)
+accelerate launch --config_file robometer/configs/distributed/no_fsdp.yaml --num_processes=1 train.py \
+  model.base_model_id=HuggingFaceTB/SmolVLM-500M-Instruct \
+  model.use_unsloth=false model.use_peft=false \
+  model.train_progress_head=true model.train_success_head=false \
+  model.train_preference_head=true \
+  model.train_vision_encoder=false model.train_language_model=true \
+  data.train_datasets=[libero_pi0] data.eval_datasets=[libero_pi0] \
+  data.max_frames=8 data.use_multi_image=true \
+  training.per_device_train_batch_size=16 training.gradient_accumulation_steps=1 \
+  training.learning_rate=4e-5 training.max_steps=2000 \
+  training.do_eval=false training.evaluation_strategy=no \
+  training.save_strategy=steps training.save_steps=100 training.logging_steps=10 \
+  "data.sample_type_ratio=[1,0,0]" training.predict_pref_progress=true \
+  loss.pref_loss_type=head loss.struct_loss_enabled=false \
+  training.output_dir=./logs/exp_d_robometer_smolvlm training.exp_name=exp_d_robometer_smolvlm \
+  training.overwrite_output_dir=True "logging.log_to=[tensorboard]" \
+  "custom_eval.eval_types=[policy_ranking,reward_alignment]" \
+  custom_eval.reward_alignment=[libero_pi0] custom_eval.policy_ranking=[libero_pi0]
+
+# Exp A: Pure BT (同模型，无正则)
+# 同上但改: model.train_preference_head=false model.progress_use_sigmoid=false
+#   training.predict_pref_progress=false loss.pref_loss_type=bt_sum loss.struct_loss_enabled=false
+
+# Exp C: BT + Entropy Prior (本文方法)
+# 同上但改: model.train_preference_head=false model.progress_use_sigmoid=false
+#   training.predict_pref_progress=false loss.pref_loss_type=bt_sum
+#   loss.struct_loss_enabled=true loss.struct_loss_type=entropy loss.struct_lambda=0.1
+```
+
+### Exp D 训练结果 (checkpoint-900 / checkpoint-1000)
+
+**训练状态**: 在 step 1000 处保存 checkpoint 后挂起 (目标 2000 步)，手动终止。
+已保存两个 checkpoint: `checkpoint-900` 和 `checkpoint-1000`。
+
+**训练曲线** (loss 每 10 步记录):
+
+| Step | loss (total) | preference_loss | pref_prog_loss | pref_prog_spearman_corr |
+|------|:---:|:---:|:---:|:---:|
+| 10 | 1.062 | — | — | — |
+| 100 | 0.748 | — | — | — |
+| 500 | 0.508 | — | — | — |
+| 800 | 0.431 | 0.177 | 0.159 | 0.464 |
+| 850 | 0.487 | 0.346 | 0.168 | 0.612 |
+| 870 | 0.424 | 0.186 | 0.201 | 0.409 |
+| 880 | 0.451 | 0.337 | 0.166 | 0.546 |
+| 890 | 0.563 | 0.350 | 0.195 | 0.348 |
+| 900 | 0.499 | 0.300 | 0.203 | 0.343 |
+| 1000 | 0.438 | — | — | — |
+
+**训练 batch 级别指标** (step 900 附近):
+
+| 指标 | 值 | 说明 |
+|------|:---:|------|
+| train_ds_pref_acc (libero256_10) | 1.000 | 训练集偏好准确率 |
+| train_ds_pref_acc (libero256_goal) | 1.000 | |
+| train_ds_pref_acc (libero256_object) | 1.000 | |
+| train_ds_pref_acc (libero256_spatial) | 0.667 | |
+| train_ds_spearman_corr (libero256_10) | 0.964 | 训练集 progress 相关 |
+| train_ds_spearman_corr (libero256_goal) | 0.437 | |
+| train_ds_spearman_corr (libero256_object) | 0.298 | |
+| train_ds_spearman_corr (libero256_spatial) | 0.830 | |
+| train_strat_pref_acc (reverse_progress) | 1.000 | 策略级偏好准确率 |
+| train_strat_pref_acc (suboptimal) | 1.000 | |
+| train_strat_pref_acc (rewind) | 1.000 | |
+| train_strat_pref_acc (different_task) | 0.500 | |
+| train_strat_spearman_corr (subsample_task) | 0.857 | |
+
+**训练速度**: ~3.3s/step, 50 分钟完成 900 步
+
+### Exp D Eval 结果 (checkpoint-900)
+
+**Eval 命令**:
+
+```bash
+cd /root/autodl-tmp/robometer
+source .venv/bin/activate
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+export HF_HOME=/root/autodl-tmp/.cache/huggingface
+export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
+export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
+
+python robometer/evals/run_baseline_eval.py \
+  reward_model=rbm \
+  model_path=/root/autodl-tmp/robometer/logs/exp_d_robometer_smolvlm/exp_d_robometer_smolvlm/checkpoint-900 \
+  "custom_eval.eval_types=[reward_alignment,policy_ranking]" \
+  custom_eval.reward_alignment=[libero_pi0] \
+  custom_eval.policy_ranking=[libero_pi0] \
+  custom_eval.use_frame_steps=true \
+  custom_eval.subsample_n_frames=5 \
+  custom_eval.reward_alignment_max_trajectories=10 \
+  custom_eval.policy_ranking_max_tasks=5 \
+  custom_eval.num_examples_per_quality_pr=5 \
+  max_frames=8 \
+  model_config.batch_size=16
+```
+
+**注意**: `model_path` 必须使用绝对路径，相对路径 (`./logs/...`) 会被 `Path()` 转换后丢失 `./` 前缀，被误判为 HF repo ID。
+
+**Reward Alignment (VOC r)**:
+
+| 数据集 | VOC r (avg Pearson) | avg MSE | n (trajectories) |
+|--------|:---:|:---:|:---:|
+| libero_90 | **0.860** | 0.037 | 40 |
+| libero_10 | **0.933** | 0.029 | 40 |
+
+**Policy Ranking** (policy_ranking_max_tasks=5, num_examples_per_quality_pr=5):
+
+| 数据集 | Kendall τ (sum) | Kendall τ (last) | Ranking Acc (sum) | Ranking Acc (last) | Suc-Fail Diff (sum) |
+|--------|:---:|:---:|:---:|:---:|:---:|
+| libero_90 | **0.504** | 0.136 | **0.752** | 0.568 | **2.175** |
+| libero_10 | — | — | — | — | — |
+
+注：`sum` 聚合 = 轨迹内所有帧 progress 求和作 reward；`last` = 只用最后一帧。libero_10 因 eval 超时未完成。
+
+**Eval 结果存储路径**: `baseline_eval_output/rbm_exp_d_robometer_smolvlm_checkpoint-900/`
+
+### 与目标指标对比
+
+| 指标 | 目标 | Exp D (SmolVLM, ckpt-900) | 状态 |
+|------|:---:|:---:|:---:|
+| \|VOC r\| | > 0.5 | **0.860 / 0.933** | ✅ 大幅超过 |
+| Kendall τ | > 0.3 | **0.504** | ✅ 大幅超过 |
+| Ranking Acc | > 0.55 | **0.752** | ✅ 大幅超过 |
+| Suc-Fail Diff | > 0 | **2.175** | ✅ 大幅超过 |
+
+### 与 Round 2b (Qwen3-VL-2B + LoRA) 对比
+
+| 指标 | Exp A (Qwen, Pure BT) | Exp C (Qwen, BT+Entropy) | Exp D (SmolVLM, 全参) |
+|------|:---:|:---:|:---:|
+| VOC r (libero_90) | 0.348 | −0.382 | **0.860** |
+| VOC r (libero_10) | 0.421 | −0.438 | **0.933** |
+| Kendall τ (libero_90) | −0.005 | 0.198 | **0.504** |
+| Ranking Acc (libero_90) | 0.498 | 0.600 | **0.752** |
+| Suc-Fail Diff (libero_90) | −0.450 | 0.681 | **2.175** |
+
+**关键观察**: SmolVLM-500M 全参微调仅 900 步就在 VOC r 上远超 Qwen3-VL-2B + LoRA 1250 步的结果，说明：
+1. 有监督 progress head (Exp D 架构) 在 reward alignment 上天然优势巨大
+2. 全参微调 > LoRA 微调 (至少在 500M 模型上)
+3. 模型大小不是决定因素 (500M vs 2B)
+
+### Exp C (BT + Entropy Prior) 训练结果 (SmolVLM, checkpoint-1000)
+
+**训练命令**:
+
+```bash
+cd /root/autodl-tmp/robometer
+source .venv/bin/activate
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+export HF_HOME=/root/autodl-tmp/.cache/huggingface
+export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
+export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
+
+accelerate launch --config_file robometer/configs/distributed/no_fsdp.yaml --num_processes=1 train.py \
+  model.base_model_id=HuggingFaceTB/SmolVLM-500M-Instruct \
+  model.use_unsloth=false model.use_peft=false \
+  model.train_progress_head=true model.train_success_head=false \
+  model.train_preference_head=false \
+  model.progress_use_sigmoid=false \
+  model.train_vision_encoder=false model.train_language_model=true \
+  data.train_datasets=[libero_pi0] data.eval_datasets=[libero_pi0] \
+  data.max_frames=8 data.use_multi_image=true \
+  training.per_device_train_batch_size=16 training.gradient_accumulation_steps=1 \
+  training.learning_rate=4e-5 training.max_steps=1000 \
+  training.do_eval=false training.evaluation_strategy=no \
+  training.save_strategy=steps training.save_steps=500 training.logging_steps=10 \
+  "data.sample_type_ratio=[1,0,0]" training.predict_pref_progress=false \
+  loss.pref_loss_type=bt_sum loss.progress_loss_type=l2 \
+  loss.struct_loss_enabled=true loss.struct_loss_type=entropy loss.struct_lambda=0.1 \
+  training.output_dir=./logs/exp_c_entropy_smolvlm training.exp_name=exp_c_entropy_smolvlm \
+  training.overwrite_output_dir=True "logging.log_to=[tensorboard]"
+```
+
+**关键配置差异 (vs Exp D)**:
+- `model.train_preference_head=false`: 不使用 preference head，纯靠 progress head 的 sum 做 BT
+- `model.progress_use_sigmoid=false`: 移除 sigmoid 激活，允许无界 potential
+- `loss.pref_loss_type=bt_sum`: 轨迹 reward = Σ Φ(s_t)，用 Bradley-Terry loss
+- `loss.struct_loss_enabled=true, loss.struct_loss_type=entropy, loss.struct_lambda=0.1`: Maximum Entropy Increment Prior
+
+**训练 Loss 走势**:
+
+| Step | preference_loss | struct_loss | 趋势 |
+|------|:---:|:---:|------|
+| 10 | 0.905 | -1.158 | 初始化 |
+| 30 | 0.741 | -1.054 | 快速下降 |
+| 100 | 0.655 | -1.180 | 收敛中 |
+| 200 | ~0.35 | ~-1.30 | 稳步收敛 |
+| 500 | 0.121-0.178 | -1.45 ~ -1.53 | 趋于稳定 |
+| 900 | ~0.16 | ~-1.55 | 趋于稳定 |
+| 1000 | 0.163-0.261 | -1.55 ~ -1.56 | 训练完成 |
+
+**关键观察**:
+1. `preference_loss` 从 0.905 降至 ~0.16-0.26，BT ranking 收敛正常
+2. `struct_loss` 从 -1.158 降至 -1.55（更负 = 更高 entropy = increment 更均匀），远离饱和点 -1.946，说明 entropy prior 全程有梯度信号
+3. `pref_acc`: 各数据集 0.5-1.0，suboptimal/rewind 策略几乎 100%
+4. `different_task` pref_acc 波动大（0.0-1.0），这是预期行为 — 不同任务间的 ranking 在纯 potential 模型下不稳定
+
+**Checkpoint 路径**: `logs/exp_c_entropy_smolvlm/exp_c_entropy_smolvlm/checkpoint-{500,1000}`
+
+**训练速度**: ~3.2s/step, ~55 分钟完成 1000 步
+
+### 当前进度
+
+- [x] SmolVLM-500M 下载 + 缓存链接
+- [x] Dry run 通过 (全参 + multi_image)
+- [x] **Exp D 训练完成** (1000/2000 步, checkpoint-900 & checkpoint-1000)
+- [x] Exp D eval: Reward Alignment ✅ (VOC r 0.86/0.93)
+- [x] Exp D eval: Policy Ranking ✅ (Kendall τ 0.504, Ranking Acc 0.752, libero_90)
+- [x] **Exp C 训练完成** (1000 步, checkpoint-500 & checkpoint-1000)
+- [ ] Exp C eval
+- [ ] Exp A 训练 (SmolVLM)
+- [ ] Eval + 对比
+
 ### 待完成
 
-- [ ] RL 实验 (sparse vs A vs C reward model, 每个 60min)
-- [ ] Exp D eval (supervised oracle 对比)
-- [ ] experiment-section-v2.md 已用实际数据填写
+- [ ] Exp C eval (reward_alignment + policy_ranking)
+- [ ] Exp A 训练 + eval
+- [ ] RL 实验 (sparse vs A vs C reward model)
+- [ ] experiment-section-v2.md 用 SmolVLM 实际数据更新
 - [ ] paper-draft-v2.md 需同步更新

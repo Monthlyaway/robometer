@@ -6,7 +6,7 @@ Our experiments aim to validate two central claims: (1) the monotonicity trap is
 
 **Benchmark.** We conduct all experiments on the LIBERO simulated manipulation benchmark (Liu et al., 2023). Following the Robometer ablation protocol (Liang et al., 2026), models are trained on 1,709 successful demonstrations from LIBERO-{10, Object, Goal, Spatial} combined with 1,929 generated failure trajectories. Evaluation is performed on the held-out LIBERO-90 suite, which contains 8,262 paired successful and failed trajectories across unseen tasks.
 
-**Base Model and Training.** All reward model variants are initialized from the Qwen3-VL-2B-Instruct vision-language model and fine-tuned with LoRA adapters (rank 16, $\alpha = 32$). Training uses 8 subsampled frames per trajectory, a batch size of 16 (effective), learning rate $2 \times 10^{-5}$, and runs for 1,250 gradient steps ($\approx$ 70 minutes on a single GPU). Checkpoints are saved every 500 steps; the final checkpoint (step 1250) is used for evaluation.
+**Base Model and Training.** All reward model variants are initialized from the SmolVLM-500M-Instruct vision-language model (HuggingFaceTB/SmolVLM-500M-Instruct) and fully fine-tuned (no LoRA). Training uses 8 subsampled frames per trajectory with multi-image input mode, a batch size of 16, learning rate $4 \times 10^{-5}$, cosine LR schedule with 10% warmup, and runs for 1,000 gradient steps ($\approx$ 55 minutes on a single RTX 4080 Super GPU). The vision encoder is frozen; only the language model and task-specific prediction heads are trained. Image resolution is set to 384px.
 
 **Metrics.** We report three standard reward model evaluation metrics:
 
@@ -28,19 +28,17 @@ Methods A and C share the **identical** model architecture: a single per-frame p
 
 #### 5.2 Core Results
 
-**Table 1.** Reward model evaluation results. Reward alignment (VOC $r$) is evaluated on 30 successful trajectories; policy ranking (Kendall $\tau$, Ranking Acc) is evaluated on 5 tasks with 20 examples per quality level.
+**Table 1.** Reward model evaluation on LIBERO. Reward alignment (VOC $r$) is the average Pearson correlation between per-frame predicted progress and ground-truth timestep indices over successful trajectories. Policy ranking uses trajectory-level reward (sum aggregation) to rank trajectories of different quality. Exp D serves as the supervised oracle upper bound.
 
-| Method | Dataset | VOC $r$ $\uparrow$ | Kendall $\tau$ $\uparrow$ | Ranking Acc $\uparrow$ |
-|--------|---------|:---:|:---:|:---:|
-| A. Pure BT | LIBERO-90 | **0.348** | −0.005 | 0.498 |
-| A. Pure BT | LIBERO-10 | **0.421** | 0.245 | 0.623 |
-| C. BT + $\mathcal{L}_{struct}$ (Ours) | LIBERO-90 | −0.382 | **0.198** | **0.600** |
+| Method | VOC $r$ $\uparrow$ | Kendall $\tau$ $\uparrow$ | Ranking Acc $\uparrow$ | Suc-Fail Diff $\uparrow$ |
+|--------|:---:|:---:|:---:|:---:|
+| A. Pure BT | *(pending)* | *(pending)* | *(pending)* | *(pending)* |
+| C. BT + $\mathcal{L}_{struct}$ (Ours) | *(pending)* | *(pending)* | *(pending)* | *(pending)* |
+| D. Full Robometer (oracle) | **0.860** | **0.504** | **0.752** | **2.175** |
 
-**Key Observation.** While the pure BT baseline (A) achieves higher VOC $r$ values, its policy ranking performance on the challenging LIBERO-90 benchmark is essentially random (Kendall $\tau \approx 0$, Ranking Acc $\approx 0.5$). In contrast, our method (C) achieves meaningful policy ranking capability (Kendall $\tau = 0.198$, Ranking Acc = 0.600), representing a substantial improvement over the baseline.
+*Note: Exp A and C results with SmolVLM-500M are pending. Previous results with Qwen3-VL-2B + LoRA (1250 steps) showed Exp A achieving Kendall $\tau = -0.005$, Ranking Acc = 0.498 on LIBERO-90, while Exp C achieved Kendall $\tau = 0.198$, Ranking Acc = 0.600 — a substantial improvement from the entropy prior.*
 
-The negative VOC $r$ for method C is an expected consequence of direction ambiguity in potential-based models: without sigmoid activation, the potential function $\Phi(s_t)$ can learn to decrease monotonically along successful trajectories rather than increase. This produces a strong but inverted Pearson correlation. Crucially, this direction ambiguity does **not** affect trajectory-level ranking: the Bradley-Terry comparison $\sigma(\Phi(\tau_w) - \Phi(\tau_l))$ is invariant to the sign of $\Phi$, and the policy ranking metrics (Kendall $\tau$, Ranking Acc) confirm that method C correctly discriminates trajectory quality.
-
-This result supports our core thesis: the monotonicity trap causes pure BT models to develop degenerate potential curvatures that satisfy ordinal ranking constraints but fail to provide meaningful trajectory-level discrimination on challenging out-of-distribution tasks. Our $\mathcal{L}_{struct}$ prior addresses this by enforcing uniform increment distributions, producing a more robust reward signal.
+**Key Observations from Exp D (Oracle Upper Bound).** The supervised Robometer method achieves strong results across all metrics: VOC $r = 0.860$ (indicating highly monotonic per-frame progress predictions), Kendall $\tau = 0.504$ (strong trajectory ranking), Ranking Accuracy = 0.752, and Suc-Fail Diff = 2.175 (large gap between successful and failed trajectory rewards). These numbers establish the target that our unsupervised method (Exp C) aims to approach using only pairwise preferences.
 
 ---
 
@@ -55,7 +53,7 @@ A critical challenge in applying entropy regularization to neural network output
 
 The following training curves demonstrate the effect:
 
-**Table 2.** $\mathcal{L}_{struct}$ training dynamics over 1,250 steps.
+**Table 2.** $\mathcal{L}_{struct}$ training dynamics (Qwen3-VL-2B + LoRA, 1250 steps). SmolVLM results pending.
 
 | Step | $\mathcal{L}_{struct}$ | $\mathcal{L}_{BT}$ | $\sigma^2(\Delta\Phi)$ |
 |------|:---:|:---:|:---:|

@@ -32,6 +32,7 @@ Prerequisites:
 """
 
 import argparse
+import logging
 import os
 import sys
 import json
@@ -43,6 +44,17 @@ import numpy as np
 import gymnasium as gym
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
+
+# Suppress per-step debug spam from the reward model inference (loguru)
+try:
+    from loguru import logger as _loguru_logger
+    _loguru_logger.disable("robometer.evals.eval_server")
+    _loguru_logger.disable("robometer.evals")
+    _loguru_logger.disable("robometer.utils.setup_utils")
+except ImportError:
+    pass
+# Also suppress standard logging
+logging.getLogger("robometer").setLevel(logging.WARNING)
 
 
 def make_libero_env(task_suite_name: str, task_id: int, seed: int):
@@ -105,9 +117,12 @@ class DINOFeatureWrapper(gym.ObservationWrapper):
         # DINO-v2-small: 384-dim; proprio: ~7-dim joint + 2-dim gripper
         self.dino_dim = 384
         self.proprio_keys = ["joint_states", "gripper_states", "ee_states"]
-        # Will be determined on first obs
         self._proprio_dim = None
-        self.observation_space = None  # set lazily
+        self._obs_space_initialized = False
+        # Placeholder obs space; updated on first observation
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(self.dino_dim,), dtype=np.float32
+        )
 
     def _get_proprio(self, obs: dict) -> np.ndarray:
         parts = []
@@ -139,12 +154,13 @@ class DINOFeatureWrapper(gym.ObservationWrapper):
 
         combined = np.concatenate([feat, proprio]).astype(np.float32)
 
-        if self.observation_space is None:
+        if not self._obs_space_initialized:
             self._proprio_dim = len(proprio)
             total_dim = self.dino_dim + self._proprio_dim
             self.observation_space = gym.spaces.Box(
                 low=-np.inf, high=np.inf, shape=(total_dim,), dtype=np.float32
             )
+            self._obs_space_initialized = True
 
         return combined
 
@@ -163,6 +179,7 @@ class RewardModelWrapper(gym.Wrapper):
         max_frames: int = 8,
         use_relative_rewards: bool = True,
         add_env_reward: bool = True,
+        reward_freq: int = 1,
     ):
         super().__init__(env)
         from scripts.example_libero_robometer_wrapper import _RewardModelInferenceMixin
@@ -174,8 +191,11 @@ class RewardModelWrapper(gym.Wrapper):
         self.reward_key = "agentview_image"
         self.use_relative_rewards = use_relative_rewards
         self.add_env_reward = add_env_reward
+        self.reward_freq = reward_freq
         self._frames = []
         self._prev_reward = 0.0
+        self._cached_pred_reward = 0.0
+        self._step_count = 0
         self._language_instruction = None
 
     def reset(self, **kwargs):
@@ -195,32 +215,38 @@ class RewardModelWrapper(gym.Wrapper):
 
     def step(self, action):
         obs, env_reward, terminated, truncated, info = self.env.step(action)
+        self._step_count += 1
 
         if isinstance(obs, dict) and self.reward_key in obs:
             from robometer.utils.tensor_utils import t2n
             self._frames.append(t2n(obs[self.reward_key]))
 
-        frames = np.stack(self._frames, axis=0) if self._frames else np.array([])
-        raw = dict(
-            frames=frames,
-            task=self._language_instruction or "",
-            id=0,
-            metadata=dict(subsequence_length=len(self._frames)),
-            video_embeddings=None,
-            text_embedding=None,
+        should_compute = (
+            self._step_count % self.reward_freq == 0
+            or terminated or truncated
         )
-        rewards, _ = self._rm._compute_rewards_batch([raw])
-        pred_reward = rewards[0] if rewards else 0.0
 
-        if self.use_relative_rewards:
-            current = pred_reward
-            pred_reward = pred_reward - self._prev_reward
-            self._prev_reward = current
-            if terminated or truncated:
-                self._prev_reward = 0.0
+        if should_compute and self._frames:
+            frames = np.stack(self._frames, axis=0)
+            raw = dict(
+                frames=frames,
+                task=self._language_instruction or "",
+                id=0,
+                metadata=dict(subsequence_length=len(self._frames)),
+                video_embeddings=None,
+                text_embedding=None,
+            )
+            rewards, _ = self._rm._compute_rewards_batch([raw])
+            full_reward = rewards[0] if rewards else 0.0
 
-        # Robometer paper: env_reward is -1/0, add pred_reward
-        env_reward_shifted = env_reward - 1.0  # sparse: -1 per step, 0 on success
+            if self.use_relative_rewards:
+                self._cached_pred_reward = full_reward - self._prev_reward
+                self._prev_reward = full_reward
+            else:
+                self._cached_pred_reward = full_reward
+
+        pred_reward = self._cached_pred_reward
+        env_reward_shifted = env_reward - 1.0
 
         if self.add_env_reward:
             out_reward = env_reward_shifted + pred_reward
@@ -233,6 +259,9 @@ class RewardModelWrapper(gym.Wrapper):
 
         if terminated or truncated:
             self._frames = []
+            self._prev_reward = 0.0
+            self._cached_pred_reward = 0.0
+            self._step_count = 0
 
         return obs, out_reward, terminated, truncated, info
 
@@ -274,6 +303,7 @@ def build_env(
     reward_model_path: Optional[str] = None,
     device: str = "cuda",
     max_frames: int = 8,
+    reward_freq: int = 1,
 ):
     """Build the full environment pipeline."""
     env, task_name = make_libero_env(task_suite, task_id, seed)
@@ -286,6 +316,7 @@ def build_env(
             max_frames=max_frames,
             use_relative_rewards=True,
             add_env_reward=True,
+            reward_freq=reward_freq,
         )
     else:
         env = SparseRewardWrapper(env)
@@ -293,10 +324,10 @@ def build_env(
     env = DINOFeatureWrapper(env, device=device)
     env = SuccessTracker(env)
 
-    print(f"Environment built: {task_name} (task_id={task_id})")
-    print(f"  Reward: {'model=' + reward_model_path if reward_model_path else 'sparse'}")
-    print(f"  Obs space: {env.observation_space}")
-    print(f"  Act space: {env.action_space}")
+    print(f"Environment built: {task_name} (task_id={task_id})", flush=True)
+    print(f"  Reward: {'model=' + reward_model_path if reward_model_path else 'sparse'}", flush=True)
+    print(f"  Obs space: {env.observation_space}", flush=True)
+    print(f"  Act space: {env.action_space}", flush=True)
 
     return env, task_name
 
@@ -309,21 +340,51 @@ def train_sac(
     total_timesteps: int,
     eval_freq: int,
     output_dir: str,
+    learning_starts: int = 5000,
 ):
     """Train SAC and log success rates."""
     from stable_baselines3 import SAC
     from stable_baselines3.common.callbacks import BaseCallback
 
     class SuccessLogCallback(BaseCallback):
-        def __init__(self, eval_freq: int, log_path: str):
+        def __init__(self, eval_freq: int, log_path: str, total_steps: int, progress_freq: int = 100):
             super().__init__()
             self.eval_freq = eval_freq
             self.log_path = log_path
+            self.total_steps = total_steps
+            self.progress_freq = progress_freq
             self.results = []
+            self._tracker = None
+            self._start_time = None
+
+        def _find_tracker(self):
+            """Walk the wrapper chain to find our SuccessTracker."""
+            env = self.training_env.envs[0]
+            while env is not None:
+                if isinstance(env, SuccessTracker):
+                    return env
+                env = getattr(env, "env", None)
+            return None
 
         def _on_step(self) -> bool:
+            import time
+            if self._start_time is None:
+                self._start_time = time.time()
+
+            if self.num_timesteps % self.progress_freq == 0:
+                elapsed = time.time() - self._start_time
+                sps = self.num_timesteps / max(elapsed, 1)
+                remaining = (self.total_steps - self.num_timesteps) / max(sps, 0.01)
+                print(
+                    f"  step {self.num_timesteps:>6d}/{self.total_steps}  "
+                    f"({sps:.1f} steps/s, ~{remaining:.0f}s left)",
+                    flush=True,
+                )
+
             if self.num_timesteps % self.eval_freq == 0:
-                sr = self.training_env.envs[0].success_rate
+                if self._tracker is None:
+                    self._tracker = self._find_tracker()
+                sr = self._tracker.success_rate if self._tracker else 0.0
                 entry = {
                     "timestep": self.num_timesteps,
                     "success_rate": sr,
@@ -332,8 +393,9 @@ def train_sac(
                 }
                 self.results.append(entry)
                 print(
-                    f"  [{reward_name}] step={self.num_timesteps:>7d}  "
-                    f"success_rate={sr:.3f}"
+                    f"  >>> EVAL [{reward_name}] step={self.num_timesteps:>6d}  "
+                    f"success_rate={sr:.3f}",
+                    flush=True,
                 )
                 with open(self.log_path, "w") as f:
                     json.dump(self.results, f, indent=2)
@@ -350,7 +412,7 @@ def train_sac(
         batch_size=128,
         tau=0.005,
         gamma=0.99,
-        learning_starts=5000,
+        learning_starts=learning_starts,
         train_freq=1,
         gradient_steps=1,
         seed=seed,
@@ -358,11 +420,15 @@ def train_sac(
         device="cuda",
     )
 
-    callback = SuccessLogCallback(eval_freq=eval_freq, log_path=log_path)
+    callback = SuccessLogCallback(
+        eval_freq=eval_freq, log_path=log_path,
+        total_steps=total_timesteps, progress_freq=100,
+    )
 
-    print(f"\nStarting SAC training: {reward_name} / seed={seed}")
-    print(f"  Total timesteps: {total_timesteps}")
-    print(f"  Log: {log_path}")
+    print(f"\nStarting SAC training: {reward_name} / seed={seed}", flush=True)
+    print(f"  Total timesteps: {total_timesteps}", flush=True)
+    print(f"  Learning starts: {learning_starts}", flush=True)
+    print(f"  Log: {log_path}", flush=True)
 
     model.learn(total_timesteps=total_timesteps, callback=callback)
     model.save(os.path.join(output_dir, f"sac_{reward_name}_seed{seed}"))
@@ -403,6 +469,19 @@ def main():
         default="./logs/rl_eval",
         help="Directory for RL training logs and saved models",
     )
+    parser.add_argument(
+        "--learning-starts",
+        type=int,
+        default=5000,
+        help="Number of random steps before SAC starts training",
+    )
+    parser.add_argument(
+        "--reward-freq",
+        type=int,
+        default=1,
+        help="Compute VLM reward every N steps (reuse last reward in between). "
+             "Set to 20 for ~20x speedup.",
+    )
 
     args = parser.parse_args()
 
@@ -417,6 +496,7 @@ def main():
         reward_model_path=args.reward_model_path,
         device=args.device,
         max_frames=args.max_frames,
+        reward_freq=args.reward_freq,
     )
 
     results = train_sac(
@@ -427,10 +507,11 @@ def main():
         total_timesteps=args.total_timesteps,
         eval_freq=args.eval_freq,
         output_dir=args.output_dir,
+        learning_starts=args.learning_starts,
     )
 
     env.close()
-    print(f"\nDone. Final success rate: {results[-1]['success_rate']:.3f}")
+    print(f"\nDone. Final success rate: {results[-1]['success_rate']:.3f}", flush=True)
 
 
 if __name__ == "__main__":

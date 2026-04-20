@@ -14,10 +14,8 @@
 #   bash my_paper/scripts/run_all_exp.sh all v2          # → logs/exp_a_pure_bt_v2/ etc.
 #   bash my_paper/scripts/run_all_exp.sh e sweep1        # → logs/exp_e_lambda_0.01_sweep1/ etc.
 #
-# Timing: ~1.7s/step on RTX 4080S with 2B model, batch=8, no FSDP.
-#   dry_run (5 steps): ~10s
-#   Single experiment (2500 steps): ~70min
-#   All A-D: ~5h
+# Timing (SmolVLM-500M): TBD after dry run
+# Previous timing (Qwen3-VL-2B): ~1.7s/step, batch=8, no FSDP.
 set -e
 
 EXP="${1:?Usage: bash run_all_exp.sh <dry_run|a|b|c|d|e|all> [suffix]}"
@@ -34,7 +32,7 @@ export ROBOMETER_DATASET_PATH=/root/autodl-tmp/raw_datasets
 export ROBOMETER_PROCESSED_DATASETS_PATH=/root/autodl-tmp/processed_datasets
 
 BASE_ARGS="
-  model.base_model_id=Qwen/Qwen3-VL-2B-Instruct
+  model.base_model_id=HuggingFaceTB/SmolVLM-500M-Instruct
   model.use_unsloth=false
   model.use_peft=true
   model.train_progress_head=true
@@ -42,7 +40,7 @@ BASE_ARGS="
   data.train_datasets=[libero_pi0]
   data.eval_datasets=[libero_pi0]
   data.max_frames=8
-  training.per_device_train_batch_size=8
+  training.per_device_train_batch_size=16
   training.gradient_accumulation_steps=1
   training.learning_rate=4e-5
   training.max_steps=2500

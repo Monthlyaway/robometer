@@ -489,8 +489,8 @@ def _setup_processor_and_tokenizer(cfg: ModelConfig) -> AutoProcessor:
             cfg.base_model_id,
             trust_remote_code=cfg.trust_remote_code,
             padding_side="left",
-            size={"longest_edge": 512},
-            max_image_size={"longest_edge": 512},
+            size={"longest_edge": 384},
+            max_image_size={"longest_edge": 384},
             use_fast=True,
         )
         logger.info(f"SmolVLM Processor: {processor}")
@@ -808,8 +808,10 @@ def setup_model_and_processor(
             raise ValueError(f"Invalid base model id: {cfg.base_model_id}")
 
         # CRITICAL: Ensure PEFT is applied to base_model BEFORE wrapping in RBM.
-        # Skip if Unsloth already applied PEFT (Unsloth models have LoRA layers but may not be PeftModel instances).
-        if apply_peft_before_wrap and cfg.use_peft and not isinstance(base_model, PeftModel):
+        # For SmolVLM: skip here — PEFT will be applied in setup_peft_model() targeting only text_model.
+        # For Qwen/Molmo: apply here to the backbone model directly.
+        is_smolvlm = "SmolVLM" in cfg.base_model_id
+        if apply_peft_before_wrap and cfg.use_peft and not isinstance(base_model, PeftModel) and not is_smolvlm:
             has_lora = any("lora" in name for name, _ in base_model.named_parameters())
             if has_lora:
                 logger.info("PEFT already applied (via Unsloth) - skipping duplicate PEFT application")
@@ -829,8 +831,10 @@ def setup_model_and_processor(
                 )
                 base_model = get_peft_model(base_model, lora_config)
                 logger.info("Applied PEFT to base_model before wrapping in RBM")
+        elif is_smolvlm:
+            logger.info("SmolVLM detected — deferring PEFT to setup_peft_model() (text_model only)")
 
-        if apply_peft_before_wrap and cfg.use_peft:
+        if apply_peft_before_wrap and cfg.use_peft and not is_smolvlm:
             has_lora = any("lora" in name for name, _ in base_model.named_parameters())
             if has_lora:
                 logger.info("Confirmed: base_model has LoRA layers - ready to load adapter weights from checkpoint")
@@ -1052,6 +1056,13 @@ def setup_peft_model(rbm_model: RBM, cfg: PEFTConfig) -> RBM:
     """Shared function to apply PEFT configuration to the model."""
 
     logger.info("Using PEFT/LoRA training...")
+
+    inner = _get_vl_inner_model(rbm_model)
+    has_lora = any("lora" in name for name, _ in inner.named_parameters())
+    if has_lora:
+        logger.info("LoRA already applied in setup_model_and_processor — skipping duplicate PEFT")
+        return rbm_model
+
     lora_config = LoraConfig(
         r=cfg.r,
         lora_alpha=cfg.lora_alpha,
@@ -1059,14 +1070,17 @@ def setup_peft_model(rbm_model: RBM, cfg: PEFTConfig) -> RBM:
         lora_dropout=cfg.lora_dropout,
         bias=cfg.bias,
     )
-    inner = _get_vl_inner_model(rbm_model)
     if cfg.peft_vision_encoder:
         logger.info("Attaching LoRA to the vision encoder...")
         inner.visual = get_peft_model(inner.visual, lora_config)
     else:
-        # Default: attach LoRA to the language model so adapter weights are actually added
         logger.info("Attaching LoRA to the language model...")
-        inner.language_model = get_peft_model(inner.language_model, lora_config)
+        if hasattr(inner, 'language_model'):
+            inner.language_model = get_peft_model(inner.language_model, lora_config)
+        elif hasattr(inner, 'model') and hasattr(inner.model, 'text_model'):
+            inner.model.text_model = get_peft_model(inner.model.text_model, lora_config)
+        else:
+            raise ValueError(f"Cannot find language model attribute on {type(inner).__name__}")
 
     # Print all trainable parameters after PEFT so adapter weights (lora_A, lora_B, etc.) are visible
     logger.info("Trainable parameters (after PEFT):")

@@ -16,7 +16,7 @@
 #
 # Timing: ~0.5s/step on RTX 4080S with 2B model.
 #   dry_run (5 steps): ~10s
-#   Single experiment (1250 steps): ~35min
+#   Single experiment (1250 steps): ~70min
 #   All A-D: ~2.5h
 set -e
 

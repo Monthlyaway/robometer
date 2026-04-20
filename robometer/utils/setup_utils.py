@@ -195,6 +195,12 @@ def _load_checkpoint_weights_from_safetensors(
                 if len(parts) == 2:
                     potential_keys.append(f"model.base_model.{parts[1]}")
 
+            # Strategy 5 (Unsloth LoRA): Unsloth wraps language_model with an extra base_model.model level.
+            # Checkpoint: ...language_model.base_model.model.layers.X...
+            # Model (std PEFT): ...language_model.layers.X...
+            if "language_model.base_model.model." in ckpt_key:
+                potential_keys.append(ckpt_key.replace("language_model.base_model.model.", "language_model.", 1))
+
             # Try each potential key
             matched = False
             for potential_key in potential_keys:
@@ -272,9 +278,6 @@ def _load_checkpoint_weights_from_safetensors(
     if not progress_head_loaded:
         logger.error("Progress head weights did not change after loading checkpoint!")
         logger.error("This indicates the checkpoint weights were not loaded correctly.")
-        import ipdb
-
-        ipdb.set_trace()  # Breakpoint if progress_head didn't load
 
     # Verify adapter weights loaded correctly (if PEFT is enabled)
     adapter_loaded_correctly = True
@@ -314,15 +317,14 @@ def _load_checkpoint_weights_from_safetensors(
                 # Try remapping strategies to find the actual key used in model
                 potential_keys = []
                 if ckpt_key.startswith("model.model."):
-                    # Strategy 1: PEFT wrapped in RBM
                     potential_keys.append(ckpt_key.replace("model.model.", "model.base_model.model.model.", 1))
-                    # Strategy 2: Fallback
                     potential_keys.append(ckpt_key.replace("model.model.", "model.", 1))
+                if "language_model.base_model.model." in ckpt_key:
+                    potential_keys.append(ckpt_key.replace("language_model.base_model.model.", "language_model.", 1))
 
-                # Check if any remapped key exists in model
                 for remapped_key in potential_keys:
                     if remapped_key in model_state_dict_after:
-                        loaded_adapter_keys.append(ckpt_key)  # Count original key as loaded
+                        loaded_adapter_keys.append(ckpt_key)
                         break
         logger.info(f"Loaded {len(loaded_adapter_keys)}/{len(checkpoint_adapter_keys)} adapter keys from checkpoint")
 
@@ -336,10 +338,7 @@ def _load_checkpoint_weights_from_safetensors(
             adapter_loaded_correctly = False
 
     if not adapter_loaded_correctly:
-        logger.error("Adapter weights did not load correctly!")
-        import ipdb
-
-        ipdb.set_trace()  # Breakpoint if adapters didn't load correctly
+        logger.error("Adapter weights did not load correctly! Results may be unreliable.")
 
     logger.info(f"Successfully loaded checkpoint weights from {checkpoint_path}")
 
@@ -757,8 +756,10 @@ def setup_model_and_processor(
                 )
         else:
             has_adapter_files = True  # treat as True so we don't skip PEFT
-    # When loading from checkpoint without adapters but use_peft: build base without PEFT, load weights, then train.py adds PEFT
-    apply_peft_before_wrap = cfg.use_peft and (not hf_model_id or has_adapter_files)
+    # Always apply PEFT before wrapping when use_peft is True.
+    # Even if checkpoint lacks adapter_config.json, the LoRA weights are in pytorch_model.bin
+    # and need matching LoRA layers in the model to be loaded correctly.
+    apply_peft_before_wrap = cfg.use_peft
 
     # Load processor and tokenizer
     if "SmolVLM" in cfg.base_model_id or "Qwen" in cfg.base_model_id or "Molmo" in cfg.base_model_id:
@@ -806,34 +807,36 @@ def setup_model_and_processor(
         else:
             raise ValueError(f"Invalid base model id: {cfg.base_model_id}")
 
-        # CRITICAL: Ensure PEFT is applied to base_model BEFORE wrapping in RBM (when checkpoint has adapters or we're not loading)
+        # CRITICAL: Ensure PEFT is applied to base_model BEFORE wrapping in RBM.
+        # Skip if Unsloth already applied PEFT (Unsloth models have LoRA layers but may not be PeftModel instances).
         if apply_peft_before_wrap and cfg.use_peft and not isinstance(base_model, PeftModel):
-            logger.warning("PEFT is enabled but base_model is not a PeftModel. Applying PEFT now...")
-            if peft_config is None:
-                raise ValueError("PEFT is enabled but peft_config is None. Cannot apply PEFT without configuration.")
-
-            # Apply PEFT to base_model
-            from peft import LoraConfig, get_peft_model
-
-            lora_config = LoraConfig(
-                r=peft_config.r,
-                lora_alpha=peft_config.lora_alpha,
-                target_modules=peft_config.target_modules,
-                lora_dropout=peft_config.lora_dropout,
-                bias=peft_config.bias,
-            )
-            base_model = get_peft_model(base_model, lora_config)
-            logger.info("Applied PEFT to base_model before wrapping in RBM")
-
-        # Verify PEFT was applied when we expect it
-        if apply_peft_before_wrap and cfg.use_peft:
-            if isinstance(base_model, PeftModel):
-                logger.info("Confirmed: base_model is a PeftModel - ready to load adapter weights from checkpoint")
+            has_lora = any("lora" in name for name, _ in base_model.named_parameters())
+            if has_lora:
+                logger.info("PEFT already applied (via Unsloth) - skipping duplicate PEFT application")
             else:
-                logger.error("CRITICAL: PEFT is enabled but base_model is not a PeftModel after applying PEFT!")
-                raise ValueError(
-                    "Failed to apply PEFT to base_model. Cannot load adapter weights without PeftModel structure."
+                logger.info("Applying PEFT to base_model before wrapping in RBM...")
+                if peft_config is None:
+                    raise ValueError("PEFT is enabled but peft_config is None. Cannot apply PEFT without configuration.")
+
+                from peft import LoraConfig, get_peft_model
+
+                lora_config = LoraConfig(
+                    r=peft_config.r,
+                    lora_alpha=peft_config.lora_alpha,
+                    target_modules=peft_config.target_modules,
+                    lora_dropout=peft_config.lora_dropout,
+                    bias=peft_config.bias,
                 )
+                base_model = get_peft_model(base_model, lora_config)
+                logger.info("Applied PEFT to base_model before wrapping in RBM")
+
+        if apply_peft_before_wrap and cfg.use_peft:
+            has_lora = any("lora" in name for name, _ in base_model.named_parameters())
+            if has_lora:
+                logger.info("Confirmed: base_model has LoRA layers - ready to load adapter weights from checkpoint")
+            else:
+                logger.error("CRITICAL: PEFT is enabled but base_model has no LoRA layers!")
+                raise ValueError("Failed to apply PEFT to base_model.")
 
         # Add special tokens and resize embeddings
         _add_special_tokens_and_resize(cfg, processor, base_model)
@@ -883,8 +886,9 @@ def setup_model_and_processor(
                         logger.info("Falling back to manual loading for all weights")
                         _load_checkpoint_weights_from_safetensors(model, checkpoint_path, cfg, load_adapters=True)
                 else:
-                    # Checkpoint has no adapter files; we built base without PEFT, load base+heads only; train.py will add PEFT
-                    logger.info("Checkpoint has no PEFT adapter files - loading base + custom heads (PEFT will be added in train.py)")
+                    # Checkpoint has no adapter_config.json, but LoRA weights are in pytorch_model.bin.
+                    # PEFT layers were already initialized above, so load all weights including LoRA.
+                    logger.info("Checkpoint has no separate adapter files - loading all weights (including LoRA from pytorch_model.bin)")
                     _load_checkpoint_weights_from_safetensors(model, checkpoint_path, cfg, load_adapters=True)
             else:
                 # For non-PEFT models, we can use from_pretrained as before

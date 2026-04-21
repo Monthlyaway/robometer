@@ -166,9 +166,10 @@ class DINOFeatureWrapper(gym.ObservationWrapper):
 
 
 class RewardModelWrapper(gym.Wrapper):
-    """Replace env reward with reward model predictions (PBRS-style).
+    """Replace env reward with PBRS from a learned potential function Φ(s).
 
-    Uses the Robometer reward wrapper internally but provides a simplified interface.
+    Directly calls the model's progress head to get raw (unclamped) per-frame
+    potentials, then computes PBRS shaping: r_t = Φ(s_{t+1}) - Φ(s_t).
     """
 
     def __init__(
@@ -178,36 +179,104 @@ class RewardModelWrapper(gym.Wrapper):
         device: str = "cuda",
         max_frames: int = 8,
         use_relative_rewards: bool = True,
-        add_env_reward: bool = True,
+        add_env_reward: bool = False,
         reward_freq: int = 1,
+        reward_scale: float = 1.0,
     ):
         super().__init__(env)
-        from scripts.example_libero_robometer_wrapper import _RewardModelInferenceMixin
+        import torch
+        from robometer.utils.save import load_model_from_hf
+        from robometer.utils.setup_utils import setup_batch_collator
 
-        class _Mixin(_RewardModelInferenceMixin):
-            pass
+        cfg, tokenizer, processor, model = load_model_from_hf(
+            model_path=model_path, device=device,
+        )
+        model.eval()
+        self._model = model
+        self._cfg = cfg
+        self._device = device
+        self._processor = processor
+        self._tokenizer = tokenizer
 
-        self._rm = _Mixin(model_path=model_path, device=device, max_frames=max_frames)
+        if cfg is not None:
+            data_cfg = getattr(cfg, "data", None)
+            if data_cfg is not None and hasattr(data_cfg, "use_multi_image"):
+                data_cfg.use_multi_image = True
+
+        self._collator = setup_batch_collator(processor, tokenizer, cfg, is_eval=True)
+
         self.reward_key = "agentview_image"
         self.use_relative_rewards = use_relative_rewards
         self.add_env_reward = add_env_reward
         self.reward_freq = reward_freq
+        self.reward_scale = reward_scale
+        self.max_frames = max_frames
         self._frames = []
-        self._prev_reward = 0.0
+        self._prev_potential = 0.0
         self._cached_pred_reward = 0.0
         self._step_count = 0
         self._language_instruction = None
 
+    def _compute_potential(self) -> float:
+        """Compute Φ(s) = sum of raw per-frame progress predictions (no clamping)."""
+        import torch
+        from robometer.evals.eval_utils import raw_dict_to_sample
+        from robometer.evals.eval_server import process_batch_helper
+
+        if not self._frames:
+            return 0.0
+
+        n = len(self._frames)
+        indices = np.linspace(0, n - 1, min(n, self.max_frames), dtype=int)
+        sampled = [self._frames[i] for i in indices]
+        frames = np.stack(sampled, axis=0)
+
+        sample = raw_dict_to_sample(
+            raw_data=dict(
+                frames=frames,
+                task=self._language_instruction or "",
+                id=0,
+                metadata=dict(subsequence_length=len(sampled)),
+                video_embeddings=None,
+                text_embedding=None,
+            ),
+            max_frames=self.max_frames,
+            sample_type="progress",
+        )
+
+        model_type = getattr(getattr(self._cfg, "model", None), "model_type", None)
+        dev = self._device
+        if dev is None:
+            dev = str(next(self._model.parameters()).device)
+
+        outputs = process_batch_helper(
+            model_type=model_type,
+            model=self._model,
+            tokenizer=self._tokenizer,
+            batch_collator=self._collator,
+            device=dev,
+            batch_data=[sample.model_dump()],
+            job_id=0,
+        )
+
+        progress_preds = outputs.get("outputs_progress", {}).get("progress_pred", [])
+        if not progress_preds or not progress_preds[0]:
+            return 0.0
+
+        raw_values = [float(v) for v in progress_preds[0]]
+        return sum(raw_values)
+
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self._language_instruction = getattr(self.env, "language_instruction", "")
-        # Walk the wrapper chain to find language_instruction
         e = self.env
         while self._language_instruction in (None, "") and hasattr(e, "env"):
             e = e.env
             self._language_instruction = getattr(e, "language_instruction", "")
         self._frames = []
-        self._prev_reward = 0.0
+        self._prev_potential = 0.0
+        self._cached_pred_reward = 0.0
+        self._step_count = 0
         if isinstance(obs, dict) and self.reward_key in obs:
             from robometer.utils.tensor_utils import t2n
             self._frames.append(t2n(obs[self.reward_key]))
@@ -227,29 +296,17 @@ class RewardModelWrapper(gym.Wrapper):
         )
 
         if should_compute and self._frames:
-            frames = np.stack(self._frames, axis=0)
-            raw = dict(
-                frames=frames,
-                task=self._language_instruction or "",
-                id=0,
-                metadata=dict(subsequence_length=len(self._frames)),
-                video_embeddings=None,
-                text_embedding=None,
-            )
-            rewards, _ = self._rm._compute_rewards_batch([raw])
-            full_reward = rewards[0] if rewards else 0.0
-
+            current_potential = self._compute_potential()
             if self.use_relative_rewards:
-                self._cached_pred_reward = full_reward - self._prev_reward
-                self._prev_reward = full_reward
+                self._cached_pred_reward = (current_potential - self._prev_potential) * self.reward_scale
+                self._prev_potential = current_potential
             else:
-                self._cached_pred_reward = full_reward
+                self._cached_pred_reward = current_potential * self.reward_scale
 
         pred_reward = self._cached_pred_reward
-        env_reward_shifted = env_reward - 1.0
 
         if self.add_env_reward:
-            out_reward = env_reward_shifted + pred_reward
+            out_reward = pred_reward + (10.0 if env_reward > 0.5 else 0.0)
         else:
             out_reward = pred_reward
 
@@ -259,7 +316,7 @@ class RewardModelWrapper(gym.Wrapper):
 
         if terminated or truncated:
             self._frames = []
-            self._prev_reward = 0.0
+            self._prev_potential = 0.0
             self._cached_pred_reward = 0.0
             self._step_count = 0
 
@@ -304,6 +361,8 @@ def build_env(
     device: str = "cuda",
     max_frames: int = 8,
     reward_freq: int = 1,
+    reward_scale: float = 1.0,
+    add_env_reward: bool = False,
 ):
     """Build the full environment pipeline."""
     env, task_name = make_libero_env(task_suite, task_id, seed)
@@ -315,8 +374,9 @@ def build_env(
             device=device,
             max_frames=max_frames,
             use_relative_rewards=True,
-            add_env_reward=True,
+            add_env_reward=add_env_reward,
             reward_freq=reward_freq,
+            reward_scale=reward_scale,
         )
     else:
         env = SparseRewardWrapper(env)
@@ -326,6 +386,7 @@ def build_env(
 
     print(f"Environment built: {task_name} (task_id={task_id})", flush=True)
     print(f"  Reward: {'model=' + reward_model_path if reward_model_path else 'sparse'}", flush=True)
+    print(f"  Reward scale: {reward_scale}, add_env_reward: {add_env_reward}", flush=True)
     print(f"  Obs space: {env.observation_space}", flush=True)
     print(f"  Act space: {env.action_space}", flush=True)
 
@@ -404,17 +465,18 @@ def train_sac(
     os.makedirs(output_dir, exist_ok=True)
     log_path = os.path.join(output_dir, f"rl_{reward_name}_seed{seed}.json")
 
-    # SAC hyperparams from Robometer paper appendix Table 7
     model = SAC(
         "MlpPolicy",
         env,
-        learning_rate=1e-5,
-        batch_size=128,
+        learning_rate=3e-4,
+        batch_size=256,
         tau=0.005,
         gamma=0.99,
         learning_starts=learning_starts,
         train_freq=1,
         gradient_steps=1,
+        buffer_size=100_000,
+        ent_coef="auto",
         seed=seed,
         verbose=0,
         device="cuda",
@@ -482,6 +544,8 @@ def main():
         help="Compute VLM reward every N steps (reuse last reward in between). "
              "Set to 20 for ~20x speedup.",
     )
+    parser.add_argument("--reward-scale", type=float, default=1.0, help="Scale factor for predicted reward")
+    parser.add_argument("--add-env-reward", action="store_true", help="Add sparse env reward (+10 on success)")
 
     args = parser.parse_args()
 
@@ -497,6 +561,8 @@ def main():
         device=args.device,
         max_frames=args.max_frames,
         reward_freq=args.reward_freq,
+        reward_scale=args.reward_scale,
+        add_env_reward=args.add_env_reward,
     )
 
     results = train_sac(

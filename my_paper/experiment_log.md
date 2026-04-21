@@ -851,6 +851,98 @@ python robometer/evals/run_baseline_eval.py \
 
 4. **方向歧义已解决**: SmolVLM 全参微调下 VOC r 为正（0.285/0.477），不再有 Qwen LoRA 时代的方向反转问题。
 
+---
+
+## Round: 下游 RL 实验 (2026-04-21)
+
+### RL 实验 Setup
+
+**目标**: 用训好的 reward model 作为 dense reward 信号，训练 RL policy 完成 LIBERO 操控任务，验证 reward model 在下游 RL 中的实际效果。
+
+**架构**:
+
+```
+LIBERO 仿真环境 (MuJoCo, OSMesa 渲染)
+    ↓ agentview_image (256x256)
+RewardModelWrapper (reward model checkpoint)
+    ↓ 每 N 步: Φ(s) = Σ progress_head(VLM(frames))
+    ↓ PBRS reward: r_t = Φ(s_{t+1}) - Φ(s_t)
+DINOFeatureWrapper
+    ↓ DINOv2-ViT-S/14 → 384-dim feature vector
+SAC Policy (MLP, stable-baselines3)
+    ↓ 7-dim continuous action (关节增量控制)
+LIBERO 环境执行
+```
+
+**关键组件**:
+
+| 组件 | 实现 | 说明 |
+|------|------|------|
+| 环境 | LIBERO-90 Task 28 ("close top drawer") | MuJoCo, 单臂 Franka Panda |
+| 观测 | DINOv2-small (384-dim) | 预训练 DINO 提取图像特征 |
+| 动作 | 7-dim Box(-1,1) | 关节增量控制 |
+| Policy | MLP (2×256 FC) | SB3 默认 MlpPolicy, **随机初始化** |
+| RL 算法 | SAC | lr=3e-4, batch=256, gamma=0.99, ent_coef=auto |
+| Reward | PBRS: r_t = Φ(s_{t+1}) - Φ(s_t) | 直接求和 progress head 原始输出，不 clamp |
+
+**训练速度**: ~3.4 steps/s (≈8h/100k steps)。瓶颈是每 N 步调用 VLM forward + 每步 DINO forward + MuJoCo CPU 渲染。
+
+### RL Run 1: Exp C reward (v1, 有 bug)
+
+**Bug**: `extract_rewards_from_output()` 将 progress head 原始输出 clamp 到 [0,1]。Exp C 的 progress head 无 sigmoid（输出无界），clamp 后所有值变为 0 或 1，取差分 → reward 恒为 0。加上 `env_reward - 1.0 = -1` 的 per-step 惩罚，agent 收到的 reward 恒为 -1.0。
+
+**结果**: success rate 从初始随机探索 20% 迅速跌至 0%，100k steps 内始终为 0%。
+
+### RL Run 2: Exp C reward (v2, 修复后)
+
+**修复**: 重写 `RewardModelWrapper`，直接调用 `process_batch_helper` 获取 `progress_pred` 原始值并 sum，不经过 `extract_rewards_from_output` 的 clamp。移除 `-1` per-step env reward 惩罚，改为纯 PBRS + success bonus (+10)。
+
+**SAC 超参数调整**: lr 1e-5 → 3e-4, batch 128 → 256, learning_starts 5000 → 1000。
+
+**Reward 信号诊断** (50 步随机动作): `pred_reward` 范围 [-0.33, 0.14], mean=-0.088 — 信号存在但方差不大。
+
+**结果** (Exp C reward, seed=42, task_id=28, reward_freq=10):
+
+| Timestep | Success Rate |
+|:---:|:---:|
+| 2000 | 0.0% |
+| 4000 | 20.0% |
+| 6000 | 13.3% |
+| 8000 | 10.0% |
+| 10000 | 8.0% |
+| 12000 | 8.0% |
+| 14000 | 0.0% |
+
+**分析**: reward 信号在工作但效果差。初始随机探索偶尔碰巧完成任务（20%），但 SAC 学出的 policy 反而更差。可能原因：
+- Exp C 的 VOC r 只有 0.285，per-frame potential 曲线太嘈杂，PBRS 差分信号噪声大
+- Agent 收到矛盾的 reward 信号，无法分辨正确方向
+
+### RL Run 3: Exp D reward (进行中)
+
+**改用 Exp D (VOC r = 0.86)** 作为 reward model，因为 PBRS 需要高质量的 per-frame cardinal reward (VOC r)，而非 trajectory-level ordinal ranking (Kendall τ)。
+
+**结果** (Exp D reward, seed=42, task_id=28, reward_freq=10, 截至 20k steps):
+
+| Timestep | Success Rate |
+|:---:|:---:|
+| 2000 | 0.0% |
+| 4000 | 0.0% |
+| ... | 0.0% |
+| 20000 | 0.0% |
+
+**状态**: 仍在运行中，暂无成功。100k steps 需约 8 小时。
+
+### 关键洞察: VOC r vs Ranking 在 RL 中的作用
+
+| 指标 | 衡量什么 | 对 RL 的意义 |
+|------|----------|-------------|
+| **VOC r** (Pearson) | Per-frame 的 cardinal quality: 每帧 reward 数值是否准确反映任务进度 | **PBRS 直接需要**: r_t = Φ(s_{t+1})-Φ(s_t)，Φ 必须是平滑单调的才能给出正确方向信号 |
+| **Kendall τ / Ranking Acc** | Trajectory-level 的 ordinal quality: 能否区分好坏轨迹 | 对 trajectory 选择/过滤有用，但 **不直接适用于 per-step PBRS** |
+
+**结论**: Exp C 在 Ranking 上超越 Exp D，但在 RL 中效果差，因为 RL 的 PBRS 需要的是 per-frame cardinal quality (VOC r)，而非 trajectory-level ordinal quality。**VOC r 高的模型在 PBRS 中给出更清晰的方向引导**。
+
+这揭示了 reward model 评估的一个重要 gap：**offline ranking 指标好不代表 online RL 效果好**。对于 PBRS 部署，VOC r 是更直接的预测指标。
+
 ### 当前进度
 
 - [x] SmolVLM-500M 下载 + 缓存链接
@@ -858,13 +950,16 @@ python robometer/evals/run_baseline_eval.py \
 - [x] **Exp D 训练完成** (1000/2000 步, checkpoint-900 & checkpoint-1000)
 - [x] Exp D eval ✅ (VOC r 0.86/0.93, Kendall τ 0.504, Ranking Acc 0.752)
 - [x] **Exp C 训练完成** (1000 步, checkpoint-500 & checkpoint-1000)
-- [x] **Exp C eval ✅** (Kendall τ **0.584**, Ranking Acc **0.792**, Suc-Fail Diff **11.755** on libero_90)
+- [x] **Exp C eval ✅** (Kendall τ 0.584, Ranking Acc 0.792, Suc-Fail Diff 11.755)
+- [x] RL Run 1 (Exp C, buggy reward) → 失败 (reward 恒 0)
+- [x] RL Run 2 (Exp C, fixed) → 效果差 (success rate 峰值 20% 后跌至 0%)
+- [ ] **RL Run 3 (Exp D) 运行中** → 截至 20k steps 均 0%
 - [ ] Exp A 训练 (SmolVLM)
-- [ ] Eval + 对比
 
 ### 待完成
 
-- [ ] Exp A 训练 + eval (SmolVLM, Pure BT baseline — 对照组)
-- [ ] RL 实验 (sparse vs A vs C reward model)
-- [ ] experiment-section-v2.md 用 SmolVLM Exp C 实际数据更新
+- [ ] RL Run 3 等待完成 (Exp D, 100k steps)
+- [ ] 如果 Exp D 也不行，排查 PBRS reward wrapper / SAC 超参 / DINOv2 特征质量
+- [ ] Exp A 训练 + eval
+- [ ] experiment-section-v2.md 更新 RL 结果
 - [ ] paper-draft-v2.md 需同步更新

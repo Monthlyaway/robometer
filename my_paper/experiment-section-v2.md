@@ -40,7 +40,7 @@ Methods A and C share the **identical** model architecture: a single per-frame p
 
 1. **Our method (C) surpasses the supervised oracle (D) on all policy ranking metrics.** Despite using only pairwise preference labels (no frame-level progress supervision), Exp C achieves Kendall $\tau = 0.584$ vs. 0.504 (+15.9%), Ranking Accuracy = 0.792 vs. 0.752 (+5.3%), and Suc-Fail Diff = 11.755 vs. 2.175 (+440%). This demonstrates that $\mathcal{L}_{struct}$ recovers trajectory-level ranking structures that are superior to those obtained from supervised progress prediction.
 
-2. **Lower VOC $r$ does not imply worse reward quality.** Exp C's lower VOC $r$ (0.285 vs. 0.860) reflects that the per-frame potential function is less smooth than a supervised progress predictor, which is expected since Exp C receives no frame-level labels. However, the dramatically higher policy ranking scores confirm that the cardinal increment structure learned by $\mathcal{L}_{struct}$ produces a better trajectory-level reward signal — the metric that directly determines RL performance.
+2. **Lower VOC $r$ does not imply worse trajectory-level reward quality.** Exp C's lower VOC $r$ (0.285 vs. 0.860) reflects that the per-frame potential function is less smooth than a supervised progress predictor, which is expected since Exp C receives no frame-level labels. However, the dramatically higher policy ranking scores confirm that the cardinal increment structure learned by $\mathcal{L}_{struct}$ produces a better trajectory-level reward signal.
 
 3. **The monotonicity trap is real and the entropy prior addresses it.** Without $\mathcal{L}_{struct}$, the pure BT baseline (A, previous Qwen results: Kendall $\tau = -0.005$) fails to rank trajectories meaningfully despite achieving higher per-frame alignment. Our structural prior prevents the model from collapsing to degenerate monotonic solutions, preserving discriminative ranking capability.
 
@@ -69,10 +69,12 @@ The following training curves demonstrate the effect:
 
 The structural loss fluctuates between −1.0 and −1.4 (well above the saturation point of −1.9459), confirming active gradient propagation. Simultaneously, the increment variance $\sigma^2(\Delta\Phi)$ decreases from 0.043 to 0.029–0.036, indicating that $\mathcal{L}_{struct}$ successfully encourages more uniform increment distributions. The Bradley-Terry preference loss $\mathcal{L}_{BT}$ converges normally (1.456 → 0.423), demonstrating that the structural regularization does not interfere with preference learning.
 
-**5.3.2 Direction Ambiguity and Future Work**
+**5.3.2 Direction Ambiguity**
 
-Our evaluation reveals an important limitation of removing the sigmoid activation: while necessary for $\mathcal{L}_{struct}$ to provide gradient, it introduces direction ambiguity in the potential function. The resulting negative VOC $r$ values indicate that the model learns a monotonically *decreasing* potential along successful trajectories.
+Removing the sigmoid activation introduces direction ambiguity: the potential function may learn to decrease monotonically along successful trajectories. In earlier Qwen3-VL-2B + LoRA experiments, Exp C exhibited negative VOC $r$ values (−0.382 on LIBERO-90). This ambiguity does not affect trajectory-level ranking (the Bradley-Terry comparison is invariant to the sign of $\Phi$), and can be resolved at deployment time by detecting and flipping the sign of the shaping reward.
 
-For downstream RL applications using potential-based reward shaping (PBRS), this ambiguity can be resolved by either: (a) detecting and flipping the sign of the shaping reward at deployment time, or (b) adding a lightweight directional constraint (e.g., a soft penalty encouraging $\Phi(s_T) > \Phi(s_0)$ for successful trajectories) that does not interfere with the entropy prior.
+Under SmolVLM-500M full fine-tuning, the direction ambiguity did not manifest: Exp C achieved positive VOC $r$ (0.285 on LIBERO-90, 0.477 on LIBERO-10), indicating that full fine-tuning provides sufficient model capacity to learn the correct direction.
 
-We leave the integration of $\mathcal{L}_{struct}$-regularized reward models into downstream RL training loops as immediate future work. The policy ranking results (Table 1) provide strong evidence that the improved increment structure should translate to more stable and effective reward shaping signals.
+**5.3.3 Downstream RL Deployment**
+
+_[TODO: Downstream RL experiments are planned using CleanRL with vectorized LIBERO environments. The deployment follows the PBRS framework described in Section 4.3: the frozen potential $\tilde{\Phi}$ provides per-step dense shaping rewards $F(s_t, a_t, s_{t+1}) = \gamma\tilde{\Phi}(s_{t+1}) - \tilde{\Phi}(s_t)$ to augment the sparse environment reward. Results will validate whether the improved trajectory-level ranking translates to better online policy optimization.]_

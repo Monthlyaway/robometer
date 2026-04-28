@@ -11,15 +11,15 @@ cd /root/autodl-tmp/robometer
 bash my_paper/scripts/run_all_exp.sh <experiment> [suffix]
 ```
 
-| 实验 | 命令 | 作用 | 论文对应 |
-|------|------|------|---------|
-| `dry_run` | `bash my_paper/scripts/run_all_exp.sh dry_run` | 5 步冒烟测试，验证全流程 (~10s) | — |
-| `a` | `bash my_paper/scripts/run_all_exp.sh a` | **Pure BT baseline**：无正则，展示 monotonicity trap | Table 1 Row A |
-| `b` | `bash my_paper/scripts/run_all_exp.sh b` | **BT + L2 Smooth**：naive 正则 baseline | Table 1 Row B |
-| `c` | `bash my_paper/scripts/run_all_exp.sh c` | **BT + Entropy Prior (本文方法)**：Maximum Entropy Increment Prior | Table 1 Row C |
-| `d` | `bash my_paper/scripts/run_all_exp.sh d` | **Full Robometer**：有监督 oracle 上界 (preference head + progress labels) | Table 1 Row D |
-| `e` | `bash my_paper/scripts/run_all_exp.sh e` | **Lambda 敏感性 sweep** (λ=0.01, 0.1, 1.0) | Section 5.3 |
-| `all` | `bash my_paper/scripts/run_all_exp.sh all` | 顺序跑 A→B→C→D (~4×70min) | — |
+| 实验      | 命令                                           | 作用                                                                       | 论文对应      |
+| --------- | ---------------------------------------------- | -------------------------------------------------------------------------- | ------------- |
+| `dry_run` | `bash my_paper/scripts/run_all_exp.sh dry_run` | 5 步冒烟测试，验证全流程 (~10s)                                            | —             |
+| `a`       | `bash my_paper/scripts/run_all_exp.sh a`       | **Pure BT baseline**：无正则，展示 monotonicity trap                       | Table 1 Row A |
+| `b`       | `bash my_paper/scripts/run_all_exp.sh b`       | **BT + L2 Smooth**：naive 正则 baseline                                    | Table 1 Row B |
+| `c`       | `bash my_paper/scripts/run_all_exp.sh c`       | **BT + Entropy Prior (本文方法)**：Maximum Entropy Increment Prior         | Table 1 Row C |
+| `d`       | `bash my_paper/scripts/run_all_exp.sh d`       | **Full Robometer**：有监督 oracle 上界 (preference head + progress labels) | Table 1 Row D |
+| `e`       | `bash my_paper/scripts/run_all_exp.sh e`       | **Lambda 敏感性 sweep** (λ=0.01, 0.1, 1.0)                                 | Section 5.3   |
+| `all`     | `bash my_paper/scripts/run_all_exp.sh all`     | 顺序跑 A→B→C→D (~4×70min)                                                  | —             |
 
 **`[suffix]` 参数**：可选，用于区分不同 round 的实验，会追加到输出目录名。例：
 ```bash
@@ -45,12 +45,12 @@ TensorBoard 事件文件位于 `logs/<exp_name>/runs/` 下。
 
 **关键 metrics 对应关系**：
 
-| TensorBoard Tag | 含义 | 方向 | 适用实验 |
-|-----------------|------|------|---------|
-| `train/preference_loss` | Bradley-Terry 偏好损失 ($\mathcal{L}_{BT}$) | ↓ 越小越好 | 全部 |
-| `train/struct_loss` | 结构正则损失 ($\mathcal{L}_{struct}$) | ↓ 越小越好 (但不能饱和在 -1.9459) | B, C |
-| `train/delta_variance` | 增量方差 σ²(ΔΦ) | 0.01–0.1 为宜 | B, C |
-| `train/delta_mean` | 增量均值 | 参考 | B, C |
+| TensorBoard Tag         | 含义                                        | 方向                              | 适用实验 |
+| ----------------------- | ------------------------------------------- | --------------------------------- | -------- |
+| `train/preference_loss` | Bradley-Terry 偏好损失 ($\mathcal{L}_{BT}$) | ↓ 越小越好                        | 全部     |
+| `train/struct_loss`     | 结构正则损失 ($\mathcal{L}_{struct}$)       | ↓ 越小越好 (但不能饱和在 -1.9459) | B, C     |
+| `train/delta_variance`  | 增量方差 σ²(ΔΦ)                             | 0.01–0.1 为宜                     | B, C     |
+| `train/delta_mean`      | 增量均值                                    | 参考                              | B, C     |
 
 **struct_loss 判读**：
 - ≈ 0 → 阶跃函数，正则项失效
@@ -128,12 +128,12 @@ python robometer/evals/run_baseline_eval.py \
 
 **关键 eval 指标**：
 
-| 指标 | JSON 路径 | 含义 | 方向 |
-|------|----------|------|------|
-| VOC r | `reward_alignment/libero_*_results.json` → `voc_r` | 逐帧 reward 与时间步的 Pearson 相关 | ↑ (注意方向歧义时为负) |
-| Kendall τ | `policy_ranking/libero_*_results.json` → `kendall_sum` | 轨迹级排序正确性 | ↑ |
-| Ranking Acc | 同上 → `ranking_accuracy_sum` | 配对排序准确率 | ↑ |
-| Suc-Fail Diff | 同上 → `suc_fail_diff_sum` | 成功/失败轨迹 reward 差 | ↑ |
+| 指标          | JSON 路径                                              | 含义                                | 方向                   |
+| ------------- | ------------------------------------------------------ | ----------------------------------- | ---------------------- |
+| VOC r         | `reward_alignment/libero_*_results.json` → `voc_r`     | 逐帧 reward 与时间步的 Pearson 相关 | ↑ (注意方向歧义时为负) |
+| Kendall τ     | `policy_ranking/libero_*_results.json` → `kendall_sum` | 轨迹级排序正确性                    | ↑                      |
+| Ranking Acc   | 同上 → `ranking_accuracy_sum`                          | 配对排序准确率                      | ↑                      |
+| Suc-Fail Diff | 同上 → `suc_fail_diff_sum`                             | 成功/失败轨迹 reward 差             | ↑                      |
 
 ---
 
@@ -141,19 +141,19 @@ python robometer/evals/run_baseline_eval.py \
 
 ### 第一优先级：RL 能跑起来的前提条件
 
-| 指标 | 最低要求 | 当前值 (Exp C, LIBERO-90) | 状态 |
-|------|---------|--------------------------|------|
-| Suc-Fail Diff | > 0 | 0.681 | ✅ 通过 |
+| 指标             | 最低要求     | 当前值 (Exp C, LIBERO-90) | 状态                         |
+| ---------------- | ------------ | ------------------------- | ---------------------------- |
+| Suc-Fail Diff    | > 0          | 0.681                     | ✅ 通过                       |
 | VOC r 方向一致性 | 所有任务同号 | 全部为负 (−0.382, −0.438) | ✅ 通过（部署时全局翻转符号） |
-| Ranking Acc | > 0.55 | 0.600 | ✅ 勉强通过 |
+| Ranking Acc      | > 0.55       | 0.600                     | ✅ 勉强通过                   |
 
 ### 第二优先级：RL 能学到东西的条件
 
-| 指标 | 为什么重要 | 理想范围 | 当前值 | 状态 |
-|------|-----------|---------|--------|------|
-| \|VOC r\| | 绝对值越大 → Φ 沿轨迹越单调 → 每步 shaping 信号越一致 | > 0.5 | 0.382 | ⚠️ 偏弱 |
-| σ²(ΔΦ) | 太小 → reward 平坦无信号；太大 → 梯度爆炸 | 0.01–0.1 | 0.029–0.036 | ✅ 合理 |
-| Kendall τ | 越高说明轨迹级排序越准 | > 0.3 | 0.198 | ⚠️ 偏弱 |
+| 指标      | 为什么重要                                            | 理想范围 | 当前值      | 状态   |
+| --------- | ----------------------------------------------------- | -------- | ----------- | ------ |
+| \|VOC r\| | 绝对值越大 → Φ 沿轨迹越单调 → 每步 shaping 信号越一致 | > 0.5    | 0.382       | ⚠️ 偏弱 |
+| σ²(ΔΦ)    | 太小 → reward 平坦无信号；太大 → 梯度爆炸             | 0.01–0.1 | 0.029–0.036 | ✅ 合理 |
+| Kendall τ | 越高说明轨迹级排序越准                                | > 0.3    | 0.198       | ⚠️ 偏弱 |
 
 ### 结论
 
@@ -171,25 +171,25 @@ python robometer/evals/run_baseline_eval.py \
 
 ### 训练配置
 
-| 参数 | 值 |
-|------|-----|
-| 模型 | Qwen3-VL-2B-Instruct + LoRA |
-| batch_size | 16 |
-| max_steps | 1250 |
-| learning_rate | 2e-5 |
-| 总数据量 | 1250 × 16 = 20,000 samples |
-| GPU | RTX 4080 Super (32GB) |
-| 显存占用 | ~11.6 GB (35%) |
-| 每步耗时 | ~3.3s |
+| 参数          | 值                          |
+| ------------- | --------------------------- |
+| 模型          | Qwen3-VL-2B-Instruct + LoRA |
+| batch_size    | 16                          |
+| max_steps     | 1250                        |
+| learning_rate | 2e-5                        |
+| 总数据量      | 1250 × 16 = 20,000 samples  |
+| GPU           | RTX 4080 Super (32GB)       |
+| 显存占用      | ~11.6 GB (35%)              |
+| 每步耗时      | ~3.3s                       |
 
 ### 训练曲线摘要
 
 **preference_loss** (随机猜测 = 0.693):
 
 | Step | Exp A | Exp C |
-|------|-------|-------|
-| 1 | 0.745 | 0.771 |
-| 501 | 0.614 | 0.681 |
+| ---- | ----- | ----- |
+| 1    | 0.745 | 0.771 |
+| 501  | 0.614 | 0.681 |
 | 1001 | 0.505 | 0.502 |
 | 1201 | 0.518 | 0.572 |
 
@@ -205,12 +205,12 @@ python robometer/evals/run_baseline_eval.py \
 
 评估配置: `use_frame_steps=true, subsample_n_frames=5, reward_alignment_max_trajectories=30`
 
-| 数据集 | Exp A (Pure BT) | Exp C (BT + Entropy) | 预期值 (论文) |
-|--------|:---:|:---:|:---:|
-| libero_10 | 0.359 | 0.181 | 0.5-0.7 / 0.8-0.9 |
-| libero_object | **-0.884** | **0.813** | 同上 |
-| libero_spatial | -0.625 | 0.229 | 同上 |
-| libero_goal | -0.229 | 0.169 | 同上 |
+| 数据集         | Exp A (Pure BT) | Exp C (BT + Entropy) |   预期值 (论文)   |
+| -------------- | :-------------: | :------------------: | :---------------: |
+| libero_10      |      0.359      |        0.181         | 0.5-0.7 / 0.8-0.9 |
+| libero_object  |   **-0.884**    |      **0.813**       |       同上        |
+| libero_spatial |     -0.625      |        0.229         |       同上        |
+| libero_goal    |     -0.229      |        0.169         |       同上        |
 
 **Eval 结果: Policy Ranking**
 - Exp A: 未能运行 (eval 用了 `libero` 而非 `libero_pi0`, 只有 successful 无 failure, 无法做 ranking)
@@ -325,26 +325,26 @@ Round 2a 中间检查发现：仅用 softmax(delta_t) (τ=1.0) 改善不够—�
 
 ### Round 2a 中间数据 (softmax τ=1.0, 在 step 345 时中止)
 
-| 指标 | Step 1 | Step 301 | Round 1 对比 |
-|------|--------|----------|-------------|
-| struct_loss | -1.924 | -1.924 | Round 1: -1.9454 (更饱和) |
-| delta_variance | 0.043 | 0.046 | Round 1: 未记录 |
-| delta_mean | 0.045 | 0.023 | Round 1: 未记录 |
-| preference_loss | 0.959 | 0.598 | Round 1 step 501: 0.681 (更慢) |
+| 指标            | Step 1 | Step 301 | Round 1 对比                   |
+| --------------- | ------ | -------- | ------------------------------ |
+| struct_loss     | -1.924 | -1.924   | Round 1: -1.9454 (更饱和)      |
+| delta_variance  | 0.043  | 0.046    | Round 1: 未记录                |
+| delta_mean      | 0.045  | 0.023    | Round 1: 未记录                |
+| preference_loss | 0.959  | 0.598    | Round 1 step 501: 0.681 (更慢) |
 
 **观察**: 移除 Sigmoid 使 BT 收敛明显加速 (preference_loss 下降更快)，但 struct_loss 仍接近饱和。
 
 ### Round 2b 配置 (softmax τ=0.1)
 
-| 参数 | 值 |
-|------|-----|
-| progress_use_sigmoid | False (无 Sigmoid) |
-| struct_loss_type | entropy (softmax-based) |
-| struct_temperature | 0.1 |
-| struct_lambda | 0.1 |
-| batch_size | 16 |
-| max_steps | 1250 |
-| 新增诊断指标 | delta_variance, delta_mean |
+| 参数                 | 值                         |
+| -------------------- | -------------------------- |
+| progress_use_sigmoid | False (无 Sigmoid)         |
+| struct_loss_type     | entropy (softmax-based)    |
+| struct_temperature   | 0.1                        |
+| struct_lambda        | 0.1                        |
+| batch_size           | 16                         |
+| max_steps            | 1250                       |
+| 新增诊断指标         | delta_variance, delta_mean |
 
 ### 论文公式更新
 
@@ -369,34 +369,34 @@ $$p_t = \text{Softmax}(\Delta\Phi / \tau)_t = \frac{\exp(\Delta\Phi_t / \tau)}{\
 
 **struct_loss** (理论最大熵 = -log(7) = -1.9459):
 
-| Step | struct_loss | 评估 |
-|------|------------|------|
-| 1 | -1.003 | 远离饱和 ✓ |
-| 251 | -1.167 | |
-| 501 | -1.320 | |
-| 651 | -1.403 | 最低点 (最大下降) |
-| 951 | -1.140 | 回弹，保持非饱和 |
+| Step | struct_loss | 评估              |
+| ---- | ----------- | ----------------- |
+| 1    | -1.003      | 远离饱和 ✓        |
+| 251  | -1.167      |                   |
+| 501  | -1.320      |                   |
+| 651  | -1.403      | 最低点 (最大下降) |
+| 951  | -1.140      | 回弹，保持非饱和  |
 
 **对比**: Round 1 全程 -1.9454 (饱和) → Round 2b 在 -1.0 至 -1.4 之间波动。**struct_loss 有效脱离饱和，L_struct 有梯度信号。**
 
 **preference_loss**:
 
 | Step | preference_loss |
-|------|----------------|
-| 1 | 1.456 |
-| 101 | 0.585 |
-| 501 | 0.594 |
-| 951 | 0.423 |
+| ---- | --------------- |
+| 1    | 1.456           |
+| 101  | 0.585           |
+| 501  | 0.594           |
+| 951  | 0.423           |
 
 BT loss 持续下降，收敛正常。
 
 **delta_variance** (增量方差，越小 = 越均匀):
 
 | Step | delta_variance |
-|------|---------------|
-| 1 | 0.043 |
-| 501 | 0.029 |
-| 951 | 0.036 |
+| ---- | -------------- |
+| 1    | 0.043          |
+| 501  | 0.029          |
+| 951  | 0.036          |
 
 delta_variance 从 0.043 降至 ~0.03，说明 L_struct 正在鼓励更均匀的增量分布。
 
@@ -430,10 +430,10 @@ delta_variance 从 0.043 降至 ~0.03，说明 L_struct 正在鼓励更均匀的
 
 **Reward Alignment 结果** (reward_alignment_max_trajectories=30):
 
-| 数据集 | VOC r (Pearson) |
-|--------|:---:|
-| libero_90 | -0.382 |
-| libero_10 | -0.438 |
+| 数据集    | VOC r (Pearson) |
+| --------- | :-------------: |
+| libero_90 |     -0.382      |
+| libero_10 |     -0.438      |
 
 **注意**: VOC r 为负是因为 `progress_use_sigmoid=false` 导致势函数方向任意（Φ(s_t) 单调递减而非递增）。
 这是 PBRS 中已知的方向歧义 (direction ambiguity) 问题。
@@ -450,41 +450,41 @@ delta_variance 从 0.043 降至 ~0.03，说明 L_struct 正在鼓励更均匀的
 
 Reward Alignment:
 
-| 数据集 | VOC r (Pearson) |
-|--------|:---:|
-| libero_90 | **0.348** |
-| libero_10 | **0.421** |
+| 数据集    | VOC r (Pearson) |
+| --------- | :-------------: |
+| libero_90 |    **0.348**    |
+| libero_10 |    **0.421**    |
 
 Policy Ranking:
 
-| 数据集 | Kendall τ (sum) | Ranking Acc (sum) | Suc-Fail Diff (sum) |
-|--------|:---:|:---:|:---:|
-| libero_90 | −0.005 | 0.498 | −0.450 |
-| libero_10 | 0.245 | 0.623 | 0.739 |
+| 数据集    | Kendall τ (sum) | Ranking Acc (sum) | Suc-Fail Diff (sum) |
+| --------- | :-------------: | :---------------: | :-----------------: |
+| libero_90 |     −0.005      |       0.498       |       −0.450        |
+| libero_10 |      0.245      |       0.623       |        0.739        |
 
 ### Exp C (BT + L_struct) Eval 结果 (LoRA 修复后)
 
 Reward Alignment:
 
-| 数据集 | VOC r (Pearson) |
-|--------|:---:|
-| libero_90 | −0.382 |
-| libero_10 | −0.438 |
+| 数据集    | VOC r (Pearson) |
+| --------- | :-------------: |
+| libero_90 |     −0.382      |
+| libero_10 |     −0.438      |
 
 Policy Ranking (libero_90 only):
 
-| 数据集 | Kendall τ (sum) | Ranking Acc (sum) | Suc-Fail Diff (sum) |
-|--------|:---:|:---:|:---:|
-| libero_90 | **0.198** | **0.600** | **0.681** |
+| 数据集    | Kendall τ (sum) | Ranking Acc (sum) | Suc-Fail Diff (sum) |
+| --------- | :-------------: | :---------------: | :-----------------: |
+| libero_90 |    **0.198**    |     **0.600**     |      **0.681**      |
 
 ### 对比分析 (LIBERO-90)
 
-| 指标 | Exp A (Pure BT) | Exp C (BT + L_struct) | 优势方 |
-|------|:---:|:---:|:---:|
-| VOC r | 0.348 | −0.382 | A (但 C 的负值是方向歧义，不影响 ranking) |
-| Kendall τ | −0.005 | **0.198** | **C (巨大提升)** |
-| Ranking Acc | 0.498 | **0.600** | **C** |
-| Suc-Fail Diff | −0.450 | **0.681** | **C** |
+| 指标          | Exp A (Pure BT) | Exp C (BT + L_struct) |                  优势方                   |
+| ------------- | :-------------: | :-------------------: | :---------------------------------------: |
+| VOC r         |      0.348      |        −0.382         | A (但 C 的负值是方向歧义，不影响 ranking) |
+| Kendall τ     |     −0.005      |       **0.198**       |             **C (巨大提升)**              |
+| Ranking Acc   |      0.498      |       **0.600**       |                   **C**                   |
+| Suc-Fail Diff |     −0.450      |       **0.681**       |                   **C**                   |
 
 **关键结论**:
 1. **纯 BT 模型在 LIBERO-90 上 policy ranking 本质上是随机的** (τ ≈ 0, acc ≈ 0.5)，验证了 monotonicity trap 假说
@@ -528,12 +528,12 @@ Qwen3-VL-2B 的 RL 推理太慢 (~0.5s/step forward)，全链路跑通但无法�
 
 ### 速度对比
 
-| 配置 | 每步时间 | samples/s | 瓶颈 |
-|------|---------|-----------|------|
-| Qwen3-VL-2B + LoRA (旧) | ~1.7s | — | VLM forward |
-| SmolVLM-500M + LoRA (MP4 collator) | ~4.3s | 0.17 | **dataloader: MP4 编解码** |
-| SmolVLM-500M heads-only (MP4) | ~3.1s | 0.34 | dataloader |
-| SmolVLM-500M 全参 + multi_image | **~3.4s** | **1.5** | 正常水平 |
+| 配置                               | 每步时间  | samples/s | 瓶颈                       |
+| ---------------------------------- | --------- | --------- | -------------------------- |
+| Qwen3-VL-2B + LoRA (旧)            | ~1.7s     | —         | VLM forward                |
+| SmolVLM-500M + LoRA (MP4 collator) | ~4.3s     | 0.17      | **dataloader: MP4 编解码** |
+| SmolVLM-500M heads-only (MP4)      | ~3.1s     | 0.34      | dataloader                 |
+| SmolVLM-500M 全参 + multi_image    | **~3.4s** | **1.5**   | 正常水平                   |
 
 **关键发现**: SmolVLM 的 collator 把每个样本的帧写成 MP4 再让 processor 读回来，是速度瓶颈 (90% 时间)。
 用 `data.use_multi_image=true` 直接传 PIL 图片绕过 MP4，speed up ~4.5x。
@@ -610,35 +610,35 @@ accelerate launch --config_file robometer/configs/distributed/no_fsdp.yaml --num
 **训练曲线** (loss 每 10 步记录):
 
 | Step | loss (total) | preference_loss | pref_prog_loss | pref_prog_spearman_corr |
-|------|:---:|:---:|:---:|:---:|
-| 10 | 1.062 | — | — | — |
-| 100 | 0.748 | — | — | — |
-| 500 | 0.508 | — | — | — |
-| 800 | 0.431 | 0.177 | 0.159 | 0.464 |
-| 850 | 0.487 | 0.346 | 0.168 | 0.612 |
-| 870 | 0.424 | 0.186 | 0.201 | 0.409 |
-| 880 | 0.451 | 0.337 | 0.166 | 0.546 |
-| 890 | 0.563 | 0.350 | 0.195 | 0.348 |
-| 900 | 0.499 | 0.300 | 0.203 | 0.343 |
-| 1000 | 0.438 | — | — | — |
+| ---- | :----------: | :-------------: | :------------: | :---------------------: |
+| 10   |    1.062     |        —        |       —        |            —            |
+| 100  |    0.748     |        —        |       —        |            —            |
+| 500  |    0.508     |        —        |       —        |            —            |
+| 800  |    0.431     |      0.177      |     0.159      |          0.464          |
+| 850  |    0.487     |      0.346      |     0.168      |          0.612          |
+| 870  |    0.424     |      0.186      |     0.201      |          0.409          |
+| 880  |    0.451     |      0.337      |     0.166      |          0.546          |
+| 890  |    0.563     |      0.350      |     0.195      |          0.348          |
+| 900  |    0.499     |      0.300      |     0.203      |          0.343          |
+| 1000 |    0.438     |        —        |       —        |            —            |
 
 **训练 batch 级别指标** (step 900 附近):
 
-| 指标 | 值 | 说明 |
-|------|:---:|------|
-| train_ds_pref_acc (libero256_10) | 1.000 | 训练集偏好准确率 |
-| train_ds_pref_acc (libero256_goal) | 1.000 | |
-| train_ds_pref_acc (libero256_object) | 1.000 | |
-| train_ds_pref_acc (libero256_spatial) | 0.667 | |
-| train_ds_spearman_corr (libero256_10) | 0.964 | 训练集 progress 相关 |
-| train_ds_spearman_corr (libero256_goal) | 0.437 | |
-| train_ds_spearman_corr (libero256_object) | 0.298 | |
-| train_ds_spearman_corr (libero256_spatial) | 0.830 | |
-| train_strat_pref_acc (reverse_progress) | 1.000 | 策略级偏好准确率 |
-| train_strat_pref_acc (suboptimal) | 1.000 | |
-| train_strat_pref_acc (rewind) | 1.000 | |
-| train_strat_pref_acc (different_task) | 0.500 | |
-| train_strat_spearman_corr (subsample_task) | 0.857 | |
+| 指标                                       |  值   | 说明                 |
+| ------------------------------------------ | :---: | -------------------- |
+| train_ds_pref_acc (libero256_10)           | 1.000 | 训练集偏好准确率     |
+| train_ds_pref_acc (libero256_goal)         | 1.000 |                      |
+| train_ds_pref_acc (libero256_object)       | 1.000 |                      |
+| train_ds_pref_acc (libero256_spatial)      | 0.667 |                      |
+| train_ds_spearman_corr (libero256_10)      | 0.964 | 训练集 progress 相关 |
+| train_ds_spearman_corr (libero256_goal)    | 0.437 |                      |
+| train_ds_spearman_corr (libero256_object)  | 0.298 |                      |
+| train_ds_spearman_corr (libero256_spatial) | 0.830 |                      |
+| train_strat_pref_acc (reverse_progress)    | 1.000 | 策略级偏好准确率     |
+| train_strat_pref_acc (suboptimal)          | 1.000 |                      |
+| train_strat_pref_acc (rewind)              | 1.000 |                      |
+| train_strat_pref_acc (different_task)      | 0.500 |                      |
+| train_strat_spearman_corr (subsample_task) | 0.857 |                      |
 
 **训练速度**: ~3.3s/step, 50 分钟完成 900 步
 
@@ -673,17 +673,17 @@ python robometer/evals/run_baseline_eval.py \
 
 **Reward Alignment (VOC r)**:
 
-| 数据集 | VOC r (avg Pearson) | avg MSE | n (trajectories) |
-|--------|:---:|:---:|:---:|
-| libero_90 | **0.860** | 0.037 | 40 |
-| libero_10 | **0.933** | 0.029 | 40 |
+| 数据集    | VOC r (avg Pearson) | avg MSE | n (trajectories) |
+| --------- | :-----------------: | :-----: | :--------------: |
+| libero_90 |      **0.860**      |  0.037  |        40        |
+| libero_10 |      **0.933**      |  0.029  |        40        |
 
 **Policy Ranking** (policy_ranking_max_tasks=5, num_examples_per_quality_pr=5):
 
-| 数据集 | Kendall τ (sum) | Kendall τ (last) | Ranking Acc (sum) | Ranking Acc (last) | Suc-Fail Diff (sum) |
-|--------|:---:|:---:|:---:|:---:|:---:|
-| libero_90 | **0.504** | 0.136 | **0.752** | 0.568 | **2.175** |
-| libero_10 | — | — | — | — | — |
+| 数据集    | Kendall τ (sum) | Kendall τ (last) | Ranking Acc (sum) | Ranking Acc (last) | Suc-Fail Diff (sum) |
+| --------- | :-------------: | :--------------: | :---------------: | :----------------: | :-----------------: |
+| libero_90 |    **0.504**    |      0.136       |     **0.752**     |       0.568        |      **2.175**      |
+| libero_10 |        —        |        —         |         —         |         —          |          —          |
 
 注：`sum` 聚合 = 轨迹内所有帧 progress 求和作 reward；`last` = 只用最后一帧。libero_10 因 eval 超时未完成。
 
@@ -691,22 +691,22 @@ python robometer/evals/run_baseline_eval.py \
 
 ### 与目标指标对比
 
-| 指标 | 目标 | Exp D (SmolVLM, ckpt-900) | 状态 |
-|------|:---:|:---:|:---:|
-| \|VOC r\| | > 0.5 | **0.860 / 0.933** | ✅ 大幅超过 |
-| Kendall τ | > 0.3 | **0.504** | ✅ 大幅超过 |
-| Ranking Acc | > 0.55 | **0.752** | ✅ 大幅超过 |
-| Suc-Fail Diff | > 0 | **2.175** | ✅ 大幅超过 |
+| 指标          |  目标  | Exp D (SmolVLM, ckpt-900) |    状态    |
+| ------------- | :----: | :-----------------------: | :--------: |
+| \|VOC r\|     | > 0.5  |     **0.860 / 0.933**     | ✅ 大幅超过 |
+| Kendall τ     | > 0.3  |         **0.504**         | ✅ 大幅超过 |
+| Ranking Acc   | > 0.55 |         **0.752**         | ✅ 大幅超过 |
+| Suc-Fail Diff |  > 0   |         **2.175**         | ✅ 大幅超过 |
 
 ### 与 Round 2b (Qwen3-VL-2B + LoRA) 对比
 
-| 指标 | Exp A (Qwen, Pure BT) | Exp C (Qwen, BT+Entropy) | Exp D (SmolVLM, 全参) |
-|------|:---:|:---:|:---:|
-| VOC r (libero_90) | 0.348 | −0.382 | **0.860** |
-| VOC r (libero_10) | 0.421 | −0.438 | **0.933** |
-| Kendall τ (libero_90) | −0.005 | 0.198 | **0.504** |
-| Ranking Acc (libero_90) | 0.498 | 0.600 | **0.752** |
-| Suc-Fail Diff (libero_90) | −0.450 | 0.681 | **2.175** |
+| 指标                      | Exp A (Qwen, Pure BT) | Exp C (Qwen, BT+Entropy) | Exp D (SmolVLM, 全参) |
+| ------------------------- | :-------------------: | :----------------------: | :-------------------: |
+| VOC r (libero_90)         |         0.348         |          −0.382          |       **0.860**       |
+| VOC r (libero_10)         |         0.421         |          −0.438          |       **0.933**       |
+| Kendall τ (libero_90)     |        −0.005         |          0.198           |       **0.504**       |
+| Ranking Acc (libero_90)   |         0.498         |          0.600           |       **0.752**       |
+| Suc-Fail Diff (libero_90) |        −0.450         |          0.681           |       **2.175**       |
 
 **关键观察**: SmolVLM-500M 全参微调仅 900 步就在 VOC r 上远超 Qwen3-VL-2B + LoRA 1250 步的结果，说明：
 1. 有监督 progress head (Exp D 架构) 在 reward alignment 上天然优势巨大
@@ -753,15 +753,15 @@ accelerate launch --config_file robometer/configs/distributed/no_fsdp.yaml --num
 
 **训练 Loss 走势**:
 
-| Step | preference_loss | struct_loss | 趋势 |
-|------|:---:|:---:|------|
-| 10 | 0.905 | -1.158 | 初始化 |
-| 30 | 0.741 | -1.054 | 快速下降 |
-| 100 | 0.655 | -1.180 | 收敛中 |
-| 200 | ~0.35 | ~-1.30 | 稳步收敛 |
-| 500 | 0.121-0.178 | -1.45 ~ -1.53 | 趋于稳定 |
-| 900 | ~0.16 | ~-1.55 | 趋于稳定 |
-| 1000 | 0.163-0.261 | -1.55 ~ -1.56 | 训练完成 |
+| Step | preference_loss |  struct_loss  | 趋势     |
+| ---- | :-------------: | :-----------: | -------- |
+| 10   |      0.905      |    -1.158     | 初始化   |
+| 30   |      0.741      |    -1.054     | 快速下降 |
+| 100  |      0.655      |    -1.180     | 收敛中   |
+| 200  |      ~0.35      |    ~-1.30     | 稳步收敛 |
+| 500  |   0.121-0.178   | -1.45 ~ -1.53 | 趋于稳定 |
+| 900  |      ~0.16      |    ~-1.55     | 趋于稳定 |
+| 1000 |   0.163-0.261   | -1.55 ~ -1.56 | 训练完成 |
 
 **关键观察**:
 1. `preference_loss` 从 0.905 降至 ~0.16-0.26，BT ranking 收敛正常
@@ -802,17 +802,17 @@ python robometer/evals/run_baseline_eval.py \
 
 **Reward Alignment (VOC r)**:
 
-| 数据集 | VOC r (avg Pearson) | avg MSE | n (trajectories) |
-|--------|:---:|:---:|:---:|
-| libero_90 | **0.285** | 0.055 | 40 |
-| libero_10 | **0.477** | 0.053 | 40 |
+| 数据集    | VOC r (avg Pearson) | avg MSE | n (trajectories) |
+| --------- | :-----------------: | :-----: | :--------------: |
+| libero_90 |      **0.685**      |  0.055  |        40        |
+| libero_10 |      **0.477**      |  0.053  |        40        |
 
 **Policy Ranking** (sum 聚合):
 
-| 数据集 | Kendall τ (sum) | Ranking Acc (sum) | Suc-Fail Diff (sum) |
-|--------|:---:|:---:|:---:|
-| libero_90 | **0.584** | **0.792** | **11.755** |
-| libero_10 | **1.000** | **1.000** | **46.868** |
+| 数据集    | Kendall τ (sum) | Ranking Acc (sum) | Suc-Fail Diff (sum) |
+| --------- | :-------------: | :---------------: | :-----------------: |
+| libero_90 |    **0.584**    |     **0.792**     |     **11.755**      |
+| libero_10 |    **1.000**    |     **1.000**     |     **46.868**      |
 
 注：Exp C 的 VOC r 为正值，说明 SmolVLM 全参微调下 potential 学到了正向单调递增（无方向歧义问题），这与之前 Qwen3-VL-2B + LoRA 的结果（VOC r 为负）形成鲜明对比。
 
@@ -820,23 +820,23 @@ python robometer/evals/run_baseline_eval.py \
 
 ### Exp C vs Exp D 对比 (SmolVLM-500M 全参)
 
-| 指标 | 目标 | Exp C (BT + Entropy) | Exp D (Full Robometer) | Exp C 状态 |
-|------|:---:|:---:|:---:|:---:|
-| VOC r (libero_90) | > 0.5 | 0.285 | **0.860** | ❌ 未达标 |
-| VOC r (libero_10) | > 0.5 | 0.477 | **0.933** | ❌ 接近但未达标 |
-| Kendall τ (libero_90) | > 0.3 | **0.584** | 0.504 | ✅ **超过 Exp D!** |
-| Ranking Acc (libero_90) | > 0.3 | **0.792** | 0.752 | ✅ **超过 Exp D!** |
-| Suc-Fail Diff (libero_90) | > 0 | **11.755** | 2.175 | ✅ **远超 Exp D!** |
+| 指标                      | 目标  | Exp C (BT + Entropy) | Exp D (Full Robometer) |    Exp C 状态     |
+| ------------------------- | :---: | :------------------: | :--------------------: | :---------------: |
+| VOC r (libero_90)         | > 0.5 |        0.685         |       **0.860**        |     ❌ 未达标      |
+| VOC r (libero_10)         | > 0.5 |        0.477         |       **0.933**        |  ❌ 接近但未达标   |
+| Kendall τ (libero_90)     | > 0.3 |      **0.584**       |         0.504          | ✅ **超过 Exp D!** |
+| Ranking Acc (libero_90)   | > 0.3 |      **0.792**       |         0.752          | ✅ **超过 Exp D!** |
+| Suc-Fail Diff (libero_90) |  > 0  |      **11.755**      |         2.175          | ✅ **远超 Exp D!** |
 
 ### 与 Round 2b (Qwen3-VL-2B + LoRA) 全面对比
 
-| 指标 | Exp A (Qwen, Pure BT) | Exp C (Qwen, BT+Entropy) | Exp D (SmolVLM, 全参) | Exp C (SmolVLM, 全参) |
-|------|:---:|:---:|:---:|:---:|
-| VOC r (libero_90) | 0.348 | −0.382 | **0.860** | 0.285 |
-| VOC r (libero_10) | 0.421 | −0.438 | **0.933** | 0.477 |
-| Kendall τ (libero_90) | −0.005 | 0.198 | 0.504 | **0.584** |
-| Ranking Acc (libero_90) | 0.498 | 0.600 | 0.752 | **0.792** |
-| Suc-Fail Diff (libero_90) | −0.450 | 0.681 | 2.175 | **11.755** |
+| 指标                      | Exp A (Qwen, Pure BT) | Exp C (Qwen, BT+Entropy) | Exp D (SmolVLM, 全参) | Exp C (SmolVLM, 全参) |
+| ------------------------- | :-------------------: | :----------------------: | :-------------------: | :-------------------: |
+| VOC r (libero_90)         |         0.348         |          −0.382          |       **0.860**       |         0.685         |
+| VOC r (libero_10)         |         0.421         |          −0.438          |       **0.933**       |         0.477         |
+| Kendall τ (libero_90)     |        −0.005         |          0.198           |         0.504         |       **0.584**       |
+| Ranking Acc (libero_90)   |         0.498         |          0.600           |         0.752         |       **0.792**       |
+| Suc-Fail Diff (libero_90) |        −0.450         |          0.681           |         2.175         |      **11.755**       |
 
 **🔑 关键发现**:
 
@@ -849,7 +849,7 @@ python robometer/evals/run_baseline_eval.py \
 
 3. **VOC r 低但 Ranking 高 → 论文核心论点得到验证**: Exp C 的 VOC r 较低说明 per-frame progress 曲线不如 supervised 方法平滑，但 trajectory-level ranking 更好 — 说明 entropy prior 成功避免了 monotonicity trap，学到了更好的 ordinal structure。
 
-4. **方向歧义已解决**: SmolVLM 全参微调下 VOC r 为正（0.285/0.477），不再有 Qwen LoRA 时代的方向反转问题。
+4. **方向歧义已解决**: SmolVLM 全参微调下 VOC r 为正（0.685/0.477），不再有 Qwen LoRA 时代的方向反转问题。
 
 ---
 
@@ -876,14 +876,14 @@ LIBERO 环境执行
 
 **关键组件**:
 
-| 组件 | 实现 | 说明 |
-|------|------|------|
-| 环境 | LIBERO-90 Task 28 ("close top drawer") | MuJoCo, 单臂 Franka Panda |
-| 观测 | DINOv2-small (384-dim) | 预训练 DINO 提取图像特征 |
-| 动作 | 7-dim Box(-1,1) | 关节增量控制 |
-| Policy | MLP (2×256 FC) | SB3 默认 MlpPolicy, **随机初始化** |
-| RL 算法 | SAC | lr=3e-4, batch=256, gamma=0.99, ent_coef=auto |
-| Reward | PBRS: r_t = Φ(s_{t+1}) - Φ(s_t) | 直接求和 progress head 原始输出，不 clamp |
+| 组件    | 实现                                   | 说明                                          |
+| ------- | -------------------------------------- | --------------------------------------------- |
+| 环境    | LIBERO-90 Task 28 ("close top drawer") | MuJoCo, 单臂 Franka Panda                     |
+| 观测    | DINOv2-small (384-dim)                 | 预训练 DINO 提取图像特征                      |
+| 动作    | 7-dim Box(-1,1)                        | 关节增量控制                                  |
+| Policy  | MLP (2×256 FC)                         | SB3 默认 MlpPolicy, **随机初始化**            |
+| RL 算法 | SAC                                    | lr=3e-4, batch=256, gamma=0.99, ent_coef=auto |
+| Reward  | PBRS: r_t = Φ(s_{t+1}) - Φ(s_t)        | 直接求和 progress head 原始输出，不 clamp     |
 
 **训练速度**: ~3.4 steps/s (≈8h/100k steps)。瓶颈是每 N 步调用 VLM forward + 每步 DINO forward + MuJoCo CPU 渲染。
 
@@ -904,17 +904,17 @@ LIBERO 环境执行
 **结果** (Exp C reward, seed=42, task_id=28, reward_freq=10):
 
 | Timestep | Success Rate |
-|:---:|:---:|
-| 2000 | 0.0% |
-| 4000 | 20.0% |
-| 6000 | 13.3% |
-| 8000 | 10.0% |
-| 10000 | 8.0% |
-| 12000 | 8.0% |
-| 14000 | 0.0% |
+| :------: | :----------: |
+|   2000   |     0.0%     |
+|   4000   |    20.0%     |
+|   6000   |    13.3%     |
+|   8000   |    10.0%     |
+|  10000   |     8.0%     |
+|  12000   |     8.0%     |
+|  14000   |     0.0%     |
 
 **分析**: reward 信号在工作但效果差。初始随机探索偶尔碰巧完成任务（20%），但 SAC 学出的 policy 反而更差。可能原因：
-- Exp C 的 VOC r 只有 0.285，per-frame potential 曲线太嘈杂，PBRS 差分信号噪声大
+- Exp C 的 VOC r 只有 0.685，per-frame potential 曲线太嘈杂，PBRS 差分信号噪声大
 - Agent 收到矛盾的 reward 信号，无法分辨正确方向
 
 ### RL Run 3: Exp D reward (进行中)
@@ -924,20 +924,20 @@ LIBERO 环境执行
 **结果** (Exp D reward, seed=42, task_id=28, reward_freq=10, 截至 20k steps):
 
 | Timestep | Success Rate |
-|:---:|:---:|
-| 2000 | 0.0% |
-| 4000 | 0.0% |
-| ... | 0.0% |
-| 20000 | 0.0% |
+| :------: | :----------: |
+|   2000   |     0.0%     |
+|   4000   |     0.0%     |
+|   ...    |     0.0%     |
+|  20000   |     0.0%     |
 
 **状态**: 仍在运行中，暂无成功。100k steps 需约 8 小时。
 
 ### 关键洞察: VOC r vs Ranking 在 RL 中的作用
 
-| 指标 | 衡量什么 | 对 RL 的意义 |
-|------|----------|-------------|
-| **VOC r** (Pearson) | Per-frame 的 cardinal quality: 每帧 reward 数值是否准确反映任务进度 | **PBRS 直接需要**: r_t = Φ(s_{t+1})-Φ(s_t)，Φ 必须是平滑单调的才能给出正确方向信号 |
-| **Kendall τ / Ranking Acc** | Trajectory-level 的 ordinal quality: 能否区分好坏轨迹 | 对 trajectory 选择/过滤有用，但 **不直接适用于 per-step PBRS** |
+| 指标                        | 衡量什么                                                            | 对 RL 的意义                                                                       |
+| --------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **VOC r** (Pearson)         | Per-frame 的 cardinal quality: 每帧 reward 数值是否准确反映任务进度 | **PBRS 直接需要**: r_t = Φ(s_{t+1})-Φ(s_t)，Φ 必须是平滑单调的才能给出正确方向信号 |
+| **Kendall τ / Ranking Acc** | Trajectory-level 的 ordinal quality: 能否区分好坏轨迹               | 对 trajectory 选择/过滤有用，但 **不直接适用于 per-step PBRS**                     |
 
 **结论**: Exp C 在 Ranking 上超越 Exp D，但在 RL 中效果差，因为 RL 的 PBRS 需要的是 per-frame cardinal quality (VOC r)，而非 trajectory-level ordinal quality。**VOC r 高的模型在 PBRS 中给出更清晰的方向引导**。
 

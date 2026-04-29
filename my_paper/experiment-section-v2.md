@@ -33,14 +33,14 @@ Methods A and C share the **identical** model architecture: a single per-frame p
 | Method                                | VOC $r$ $\uparrow$ | Kendall $\tau$ $\uparrow$ | Ranking Acc $\uparrow$ | Suc-Fail Diff $\uparrow$ |
 | ------------------------------------- | :----------------: | :-----------------------: | :--------------------: | :----------------------: |
 | A. Pure BT                            |    *(pending)*     |        *(pending)*        |      *(pending)*       |       *(pending)*        |
-| C. BT + $\mathcal{L}_{struct}$ (Ours) |       0.685        |         **0.584**         |       **0.792**        |        **11.755**        |
+| C. BT + $\mathcal{L}_{struct}$ (Ours) |       0.285        |         **0.584**         |       **0.792**        |        **11.755**        |
 | D. Full Robometer (oracle)            |     **0.860**      |           0.504           |         0.752          |          2.175           |
 
 **Key Observations.**
 
 1. **Our method (C) surpasses the supervised oracle (D) on all policy ranking metrics.** Despite using only pairwise preference labels (no frame-level progress supervision), Exp C achieves Kendall $\tau = 0.584$ vs. 0.504 (+15.9%), Ranking Accuracy = 0.792 vs. 0.752 (+5.3%), and Suc-Fail Diff = 11.755 vs. 2.175 (+440%). This demonstrates that $\mathcal{L}_{struct}$ recovers trajectory-level ranking structures that are superior to those obtained from supervised progress prediction.
 
-2. **Lower VOC $r$ does not imply worse trajectory-level reward quality.** Exp C's lower VOC $r$ (0.685 vs. 0.860) reflects that the per-frame potential function is less smooth than a supervised progress predictor, which is expected since Exp C receives no frame-level labels. However, the dramatically higher policy ranking scores confirm that the cardinal increment structure learned by $\mathcal{L}_{struct}$ produces a better trajectory-level reward signal.
+2. **Lower VOC $r$ does not imply worse trajectory-level reward quality.** Exp C's lower VOC $r$ (0.285 vs. 0.860) reflects that the per-frame potential function is less smooth than a supervised progress predictor, which is expected since Exp C receives no frame-level labels. However, the dramatically higher policy ranking scores confirm that the cardinal increment structure learned by $\mathcal{L}_{struct}$ produces a better trajectory-level reward signal.
 
 3. **The monotonicity trap is real and the entropy prior addresses it.** Without $\mathcal{L}_{struct}$, the pure BT baseline (A, previous Qwen results: Kendall $\tau = -0.005$) fails to rank trajectories meaningfully despite achieving higher per-frame alignment. Our structural prior prevents the model from collapsing to degenerate monotonic solutions, preserving discriminative ranking capability.
 
@@ -73,7 +73,7 @@ The structural loss fluctuates between −1.0 and −1.4 (well above the saturat
 
 Removing the sigmoid activation introduces direction ambiguity: the potential function may learn to decrease monotonically along successful trajectories. In earlier Qwen3-VL-2B + LoRA experiments, Exp C exhibited negative VOC $r$ values (−0.382 on LIBERO-90). This ambiguity does not affect trajectory-level ranking (the Bradley-Terry comparison is invariant to the sign of $\Phi$), and can be resolved at deployment time by detecting and flipping the sign of the shaping reward.
 
-Under SmolVLM-500M full fine-tuning, the direction ambiguity did not manifest: Exp C achieved positive VOC $r$ (0.685 on LIBERO-90, 0.477 on LIBERO-10), indicating that full fine-tuning provides sufficient model capacity to learn the correct direction.
+Under SmolVLM-500M full fine-tuning, the direction ambiguity did not manifest: Exp C achieved positive VOC $r$ (0.285 on LIBERO-90, 0.477 on LIBERO-10), indicating that full fine-tuning provides sufficient model capacity to learn the correct direction.
 
 **5.3.3 Downstream RL Deployment**
 

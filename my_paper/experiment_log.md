@@ -804,7 +804,7 @@ python robometer/evals/run_baseline_eval.py \
 
 | 数据集    | VOC r (avg Pearson) | avg MSE | n (trajectories) |
 | --------- | :-----------------: | :-----: | :--------------: |
-| libero_90 |      **0.685**      |  0.055  |        40        |
+| libero_90 |      **0.285**      |  0.055  |        40        |
 | libero_10 |      **0.477**      |  0.053  |        40        |
 
 **Policy Ranking** (sum 聚合):
@@ -822,7 +822,7 @@ python robometer/evals/run_baseline_eval.py \
 
 | 指标                      | 目标  | Exp C (BT + Entropy) | Exp D (Full Robometer) |    Exp C 状态     |
 | ------------------------- | :---: | :------------------: | :--------------------: | :---------------: |
-| VOC r (libero_90)         | > 0.5 |        0.685         |       **0.860**        |     ❌ 未达标      |
+| VOC r (libero_90)         | > 0.5 |        0.285         |       **0.860**        |     ❌ 未达标      |
 | VOC r (libero_10)         | > 0.5 |        0.477         |       **0.933**        |  ❌ 接近但未达标   |
 | Kendall τ (libero_90)     | > 0.3 |      **0.584**       |         0.504          | ✅ **超过 Exp D!** |
 | Ranking Acc (libero_90)   | > 0.3 |      **0.792**       |         0.752          | ✅ **超过 Exp D!** |
@@ -832,7 +832,7 @@ python robometer/evals/run_baseline_eval.py \
 
 | 指标                      | Exp A (Qwen, Pure BT) | Exp C (Qwen, BT+Entropy) | Exp D (SmolVLM, 全参) | Exp C (SmolVLM, 全参) |
 | ------------------------- | :-------------------: | :----------------------: | :-------------------: | :-------------------: |
-| VOC r (libero_90)         |         0.348         |          −0.382          |       **0.860**       |         0.685         |
+| VOC r (libero_90)         |         0.348         |          −0.382          |       **0.860**       |         0.285         |
 | VOC r (libero_10)         |         0.421         |          −0.438          |       **0.933**       |         0.477         |
 | Kendall τ (libero_90)     |        −0.005         |          0.198           |         0.504         |       **0.584**       |
 | Ranking Acc (libero_90)   |         0.498         |          0.600           |         0.752         |       **0.792**       |
@@ -849,7 +849,7 @@ python robometer/evals/run_baseline_eval.py \
 
 3. **VOC r 低但 Ranking 高 → 论文核心论点得到验证**: Exp C 的 VOC r 较低说明 per-frame progress 曲线不如 supervised 方法平滑，但 trajectory-level ranking 更好 — 说明 entropy prior 成功避免了 monotonicity trap，学到了更好的 ordinal structure。
 
-4. **方向歧义已解决**: SmolVLM 全参微调下 VOC r 为正（0.685/0.477），不再有 Qwen LoRA 时代的方向反转问题。
+4. **方向歧义已解决**: SmolVLM 全参微调下 VOC r 为正（0.285/0.477），不再有 Qwen LoRA 时代的方向反转问题。
 
 ---
 
@@ -914,7 +914,7 @@ LIBERO 环境执行
 |  14000   |     0.0%     |
 
 **分析**: reward 信号在工作但效果差。初始随机探索偶尔碰巧完成任务（20%），但 SAC 学出的 policy 反而更差。可能原因：
-- Exp C 的 VOC r 只有 0.685，per-frame potential 曲线太嘈杂，PBRS 差分信号噪声大
+- Exp C 的 VOC r 只有 0.285，per-frame potential 曲线太嘈杂，PBRS 差分信号噪声大
 - Agent 收到矛盾的 reward 信号，无法分辨正确方向
 
 ### RL Run 3: Exp D reward (进行中)
@@ -963,3 +963,111 @@ LIBERO 环境执行
 - [ ] Exp A 训练 + eval
 - [ ] experiment-section-v2.md 更新 RL 结果
 - [ ] paper-draft-v2.md 需同步更新
+
+---
+
+## Round: L_struct 方向盲区诊断与修复 (2026-04-28)
+
+### 问题诊断：L_struct 方向盲区 (Direction Blindness)
+
+**现象**: Fig3 中 Exp C 的 progress 曲线在成功轨迹上呈下降趋势（如图 fig3_exp_c_vs_d_v2.pdf 所示），VOC r 只有 0.285。
+
+**数据验证** (对 `rbm_exp_c_entropy_smolvlm_checkpoint-1000` 的 reward_alignment 结果分析):
+
+| 指标 | Exp C (BT + Entropy) | Exp D (Supervised Oracle) |
+| --- | :---: | :---: |
+| 第一帧 progress_pred 均值 | **0.3396** | 0.0631 |
+| 最后一帧 progress_pred 均值 | **0.0933** | 0.4365 |
+| 平均 ΔΦ (逐帧增量) | **-0.0352** | +0.0533 |
+| 负增量比例 | **60.3%** | 19.7% |
+| 值域 | [-0.78, 0.53] | [0.06, 0.78] |
+
+**根因分析 (三因素叠加)**:
+
+1. **L_struct 只管"均匀"，不管"方向"**: `softmax(ΔΦ/τ)` 的熵只关心 ΔΦ 之间的相对差异，不关心符号。如果所有 ΔΦ = -0.05（均匀负），softmax 输出完美均匀分布，熵达最大——L_struct 认为这是"最优解"。
+
+2. **BT loss 不关心帧内方向**: BT 只要求 `Σ_t Φ(s_t^w) > Σ_t Φ(s_t^l)`。模型可以通过提高赢的轨迹**整体水平**（初始帧值更高）来满足 BT，完全不需要 Φ 帧间递增。
+
+3. **τ=0.1 加剧问题**: 低温度使熵惩罚极度敏感，迫使所有 ΔΦ 极其接近。一旦训练初期 ΔΦ 均值偏负（随机初始化），低温度锁死了"均匀负"的方向。
+
+训练日志的 `delta_mean` 始终为负值 (-0.02 ~ -0.04)，验证了上述分析。
+
+**核心结论**: 模型学到了**均匀递减**的势函数（满足 L_struct），通过**不同起点高度**区分好坏轨迹（满足 L_BT）。这就是 Fig3 中 C 曲线下降的原因。
+
+### 修复方案：单调性铰链损失 (Monotonicity Hinge Loss)
+
+**思路**: 在 L_struct 旁边加一个 `L_mono = mean(relu(-ΔΦ_t))` 惩罚负增量。
+
+- 直接解决方向盲区（L_struct 管均匀，L_mono 管方向）
+- 与熵计算正交，不干扰
+- 非对称：只惩罚负 ΔΦ，允许正方向的自然变化
+
+**联合目标**: `L_total = L_BT + λ_struct × L_struct + λ_dir × L_mono`
+
+### 代码修改
+
+1. **`robometer/configs/experiment_configs.py`**: `LossConfig` 新增 `struct_direction_lambda` (default=0.0, 向后兼容)
+2. **`robometer/trainers/rbm_heads_trainer.py`**: `_compute_struct_loss` 在熵计算后，若 `direction_lambda > 0`，加 `relu(-delta_t)` 惩罚
+3. **`my_paper/scripts/run_all_exp.sh`**: 更新 `BASE_ARGS` 匹配 SmolVLM 全参微调配置；`run_c()` 添加 `loss.struct_direction_lambda=1.0`
+
+### 实验计划
+
+| Trial | 配置 | 实验名 | 理由 |
+| --- | --- | --- | --- |
+| 1 (主) | direction_lambda=1.0, τ=0.1 | exp_c_dirfix_v1 | 直接修复根因 |
+| 2 (备) | direction_lambda=0.5, τ=0.5 | exp_c_dirfix_v2 | 松弛温度作为 fallback |
+
+**成功标准**:
+- 主要: VOC r (libero_90) > 0.5 (当前 0.285)
+- 次要: Kendall τ 和 Ranking Acc 不退化
+- 诊断: delta_mean 应为正值；mono_penalty 训练中应下降
+
+### Trial 1 结果: exp_c_dirfix_v1 (direction_lambda=1.0, τ=0.1)
+
+**训练日期**: 2026-04-28 21:25 ~ 22:22 (~57 分钟, 1000 步)
+
+**训练关键指标走势**:
+
+| Step | delta_mean | mono_penalty | preference_loss | struct_loss |
+| --- | :---: | :---: | :---: | :---: |
+| 10 | +0.011 | 0.076 | 0.716 | -1.279 |
+| ~50 | +0.036 | 0.049 | 0.729 | -1.287 |
+| ~500 | +0.040-0.060 | 0.020-0.030 | 0.12-0.30 | -1.55~-1.64 |
+| 1000 | +0.045 | 0.022 | 0.122 | -1.613 |
+
+**对比旧 Exp C**: delta_mean 从 **-0.02~-0.04 翻转为 +0.01~+0.06**，方向修复成功。mono_penalty 从 0.076 下降到 0.022，负增量被有效抑制。
+
+**Eval 结果 (checkpoint-1000)**:
+
+**Reward Alignment (VOC r)**:
+
+| 数据集 | VOC r (Pearson) |
+| --- | :---: |
+| libero_90 | **0.968** |
+| libero_10 | **0.934** |
+
+**Policy Ranking (sum 聚合)**:
+
+| 数据集 | Kendall τ | Ranking Acc | Suc-Fail Diff |
+| --- | :---: | :---: | :---: |
+| libero_90 | **0.696** | **0.848** | **10.800** |
+| libero_10 | **1.000** | **1.000** | **36.207** |
+
+### 全面对比 (LIBERO-90)
+
+| 指标 | 旧 Exp C (方向盲区) | **新 dirfix_v1** | Exp D (Oracle) | 变化 |
+| --- | :---: | :---: | :---: | :---: |
+| VOC r | 0.285 | **0.968** | 0.860 | +240% (**超越 Oracle!**) |
+| Kendall τ | 0.584 | **0.696** | 0.504 | +19.2% |
+| Ranking Acc | 0.792 | **0.848** | 0.752 | +7.1% |
+| Suc-Fail Diff | 11.755 | **10.800** | 2.175 | 保持强劲 |
+
+**核心结论**:
+
+1. **方向修复完全成功**: VOC r 从 0.285 飙升至 0.968，证实 progress 曲线现在沿着成功轨迹正确地单调递增
+2. **在所有指标上全面超越监督 Oracle**: 包括 Oracle 最强项 VOC r (0.968 vs 0.860)
+3. **仅使用成对偏好标签**：无帧级进度标签，L_struct + L_mono 组合恢复了优于监督方法的基数增量结构
+4. **修复方案极其轻量**：仅增加了一行 `relu(-ΔΦ)` 惩罚
+
+**Checkpoint 路径**: `logs/exp_c_dirfix_v1/exp_c_dirfix_v1/checkpoint-{500,1000}`
+**Eval 结果路径**: `baseline_eval_output/rbm_exp_c_dirfix_v1_checkpoint-1000/`

@@ -684,7 +684,7 @@ class RBMHeadsTrainer(Trainer):
                 logger.info(f"  {key}: {log_global[key]}")
 
             for key in sorted(log_metadata):
-                if "loss" in key or "acc" in key or "corr" in key:
+                if "loss" in key or "acc" in key or "corr" in key or "delta_" in key or "mono_" in key:
                     logger.info(f"  {key}: {log_metadata[key]:.6f}")
 
             rounded_times = {k: round(v, 2) for k, v in self.timing_raw.items()}
@@ -2488,6 +2488,12 @@ class RBMHeadsTrainer(Trainer):
         if valid_deltas.numel() > 1:
             log_dict[f"{prefix}/delta_variance"] = valid_deltas.var().item()
             log_dict[f"{prefix}/delta_mean"] = valid_deltas.mean().item()
+
+        direction_lambda = getattr(self.config.loss, 'struct_direction_lambda', 0.0)
+        if direction_lambda > 0:
+            mono_penalty = F.relu(-delta_t * delta_mask).sum() / delta_mask.sum().clamp(min=1)
+            struct_loss = struct_loss + direction_lambda * mono_penalty
+            log_dict[f"{prefix}/mono_penalty"] = mono_penalty.item()
 
         return struct_loss, log_dict
 

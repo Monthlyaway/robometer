@@ -457,6 +457,10 @@ class LossConfig:
         default=0.1,
         metadata={"help": "Softmax temperature for entropy struct loss. Lower = sharper distribution = stronger gradient."},
     )
+    struct_direction_lambda: float = field(
+        default=0.0,
+        metadata={"help": "Weight for monotonicity hinge loss mean(relu(-delta)). Penalizes negative increments to fix direction blindness in entropy prior."},
+    )
     pref_loss_type: str = field(
         default="head",
         metadata={"help": "'head' (original preference head) or 'bt_sum' (sum progress outputs as BT potential)"},

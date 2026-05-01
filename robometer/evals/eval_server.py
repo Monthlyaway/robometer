@@ -56,7 +56,7 @@ from robometer.models.utils import ModelOutput, convert_bins_to_continuous, conv
 from robometer.utils.config_utils import display_config, convert_hydra_to_dataclass
 from robometer.utils.logger import get_logger, setup_loguru_logging
 
-LOG_LEVEL = "DEBUG"
+LOG_LEVEL = os.environ.get("ROBOMETER_LOG_LEVEL", "DEBUG")
 setup_loguru_logging(log_level=LOG_LEVEL)
 logger = get_logger()
 logger.info(f"robometer.eval_server logger initialized at level {LOG_LEVEL}")

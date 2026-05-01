@@ -137,34 +137,6 @@ python robometer/evals/run_baseline_eval.py \
 
 ---
 
-## RL 实验准入标准：Reward Model 需要达到的指标
-
-### 第一优先级：RL 能跑起来的前提条件
-
-| 指标             | 最低要求     | 当前值 (Exp C, LIBERO-90) | 状态                         |
-| ---------------- | ------------ | ------------------------- | ---------------------------- |
-| Suc-Fail Diff    | > 0          | 0.681                     | ✅ 通过                       |
-| VOC r 方向一致性 | 所有任务同号 | 全部为负 (−0.382, −0.438) | ✅ 通过（部署时全局翻转符号） |
-| Ranking Acc      | > 0.55       | 0.600                     | ✅ 勉强通过                   |
-
-### 第二优先级：RL 能学到东西的条件
-
-| 指标      | 为什么重要                                            | 理想范围 | 当前值      | 状态   |
-| --------- | ----------------------------------------------------- | -------- | ----------- | ------ |
-| \|VOC r\| | 绝对值越大 → Φ 沿轨迹越单调 → 每步 shaping 信号越一致 | > 0.5    | 0.382       | ⚠️ 偏弱 |
-| σ²(ΔΦ)    | 太小 → reward 平坦无信号；太大 → 梯度爆炸             | 0.01–0.1 | 0.029–0.036 | ✅ 合理 |
-| Kendall τ | 越高说明轨迹级排序越准                                | > 0.3    | 0.198       | ⚠️ 偏弱 |
-
-### 结论
-
-当前模型处于"可以尝试 RL"的边界。核心盯两个数：
-1. **Suc-Fail Diff > 0** — 模型能分清成功和失败（底线，已达到）
-2. **|VOC r| 尽可能高且方向一致** — 决定每步 shaping reward `F = γΦ(s') - Φ(s)` 是否有意义（当前 0.382 偏弱，per-step signal 会比较 noisy）
-
-如果 RL 学不动，优先回来改 reward model（加方向约束、调大 λ），而不是调 RL 超参。
-
----
-
 ## Round 1: Exp A (Pure BT) vs Exp C (BT + Entropy)
 
 **日期**: 2026-04-19 20:20
@@ -853,119 +825,6 @@ python robometer/evals/run_baseline_eval.py \
 
 ---
 
-## Round: 下游 RL 实验 (2026-04-21)
-
-### RL 实验 Setup
-
-**目标**: 用训好的 reward model 作为 dense reward 信号，训练 RL policy 完成 LIBERO 操控任务，验证 reward model 在下游 RL 中的实际效果。
-
-**架构**:
-
-```
-LIBERO 仿真环境 (MuJoCo, OSMesa 渲染)
-    ↓ agentview_image (256x256)
-RewardModelWrapper (reward model checkpoint)
-    ↓ 每 N 步: Φ(s) = Σ progress_head(VLM(frames))
-    ↓ PBRS reward: r_t = Φ(s_{t+1}) - Φ(s_t)
-DINOFeatureWrapper
-    ↓ DINOv2-ViT-S/14 → 384-dim feature vector
-SAC Policy (MLP, stable-baselines3)
-    ↓ 7-dim continuous action (关节增量控制)
-LIBERO 环境执行
-```
-
-**关键组件**:
-
-| 组件    | 实现                                   | 说明                                          |
-| ------- | -------------------------------------- | --------------------------------------------- |
-| 环境    | LIBERO-90 Task 28 ("close top drawer") | MuJoCo, 单臂 Franka Panda                     |
-| 观测    | DINOv2-small (384-dim)                 | 预训练 DINO 提取图像特征                      |
-| 动作    | 7-dim Box(-1,1)                        | 关节增量控制                                  |
-| Policy  | MLP (2×256 FC)                         | SB3 默认 MlpPolicy, **随机初始化**            |
-| RL 算法 | SAC                                    | lr=3e-4, batch=256, gamma=0.99, ent_coef=auto |
-| Reward  | PBRS: r_t = Φ(s_{t+1}) - Φ(s_t)        | 直接求和 progress head 原始输出，不 clamp     |
-
-**训练速度**: ~3.4 steps/s (≈8h/100k steps)。瓶颈是每 N 步调用 VLM forward + 每步 DINO forward + MuJoCo CPU 渲染。
-
-### RL Run 1: Exp C reward (v1, 有 bug)
-
-**Bug**: `extract_rewards_from_output()` 将 progress head 原始输出 clamp 到 [0,1]。Exp C 的 progress head 无 sigmoid（输出无界），clamp 后所有值变为 0 或 1，取差分 → reward 恒为 0。加上 `env_reward - 1.0 = -1` 的 per-step 惩罚，agent 收到的 reward 恒为 -1.0。
-
-**结果**: success rate 从初始随机探索 20% 迅速跌至 0%，100k steps 内始终为 0%。
-
-### RL Run 2: Exp C reward (v2, 修复后)
-
-**修复**: 重写 `RewardModelWrapper`，直接调用 `process_batch_helper` 获取 `progress_pred` 原始值并 sum，不经过 `extract_rewards_from_output` 的 clamp。移除 `-1` per-step env reward 惩罚，改为纯 PBRS + success bonus (+10)。
-
-**SAC 超参数调整**: lr 1e-5 → 3e-4, batch 128 → 256, learning_starts 5000 → 1000。
-
-**Reward 信号诊断** (50 步随机动作): `pred_reward` 范围 [-0.33, 0.14], mean=-0.088 — 信号存在但方差不大。
-
-**结果** (Exp C reward, seed=42, task_id=28, reward_freq=10):
-
-| Timestep | Success Rate |
-| :------: | :----------: |
-|   2000   |     0.0%     |
-|   4000   |    20.0%     |
-|   6000   |    13.3%     |
-|   8000   |    10.0%     |
-|  10000   |     8.0%     |
-|  12000   |     8.0%     |
-|  14000   |     0.0%     |
-
-**分析**: reward 信号在工作但效果差。初始随机探索偶尔碰巧完成任务（20%），但 SAC 学出的 policy 反而更差。可能原因：
-- Exp C 的 VOC r 只有 0.285，per-frame potential 曲线太嘈杂，PBRS 差分信号噪声大
-- Agent 收到矛盾的 reward 信号，无法分辨正确方向
-
-### RL Run 3: Exp D reward (进行中)
-
-**改用 Exp D (VOC r = 0.86)** 作为 reward model，因为 PBRS 需要高质量的 per-frame cardinal reward (VOC r)，而非 trajectory-level ordinal ranking (Kendall τ)。
-
-**结果** (Exp D reward, seed=42, task_id=28, reward_freq=10, 截至 20k steps):
-
-| Timestep | Success Rate |
-| :------: | :----------: |
-|   2000   |     0.0%     |
-|   4000   |     0.0%     |
-|   ...    |     0.0%     |
-|  20000   |     0.0%     |
-
-**状态**: 仍在运行中，暂无成功。100k steps 需约 8 小时。
-
-### 关键洞察: VOC r vs Ranking 在 RL 中的作用
-
-| 指标                        | 衡量什么                                                            | 对 RL 的意义                                                                       |
-| --------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| **VOC r** (Pearson)         | Per-frame 的 cardinal quality: 每帧 reward 数值是否准确反映任务进度 | **PBRS 直接需要**: r_t = Φ(s_{t+1})-Φ(s_t)，Φ 必须是平滑单调的才能给出正确方向信号 |
-| **Kendall τ / Ranking Acc** | Trajectory-level 的 ordinal quality: 能否区分好坏轨迹               | 对 trajectory 选择/过滤有用，但 **不直接适用于 per-step PBRS**                     |
-
-**结论**: Exp C 在 Ranking 上超越 Exp D，但在 RL 中效果差，因为 RL 的 PBRS 需要的是 per-frame cardinal quality (VOC r)，而非 trajectory-level ordinal quality。**VOC r 高的模型在 PBRS 中给出更清晰的方向引导**。
-
-这揭示了 reward model 评估的一个重要 gap：**offline ranking 指标好不代表 online RL 效果好**。对于 PBRS 部署，VOC r 是更直接的预测指标。
-
-### 当前进度
-
-- [x] SmolVLM-500M 下载 + 缓存链接
-- [x] Dry run 通过 (全参 + multi_image)
-- [x] **Exp D 训练完成** (1000/2000 步, checkpoint-900 & checkpoint-1000)
-- [x] Exp D eval ✅ (VOC r 0.86/0.93, Kendall τ 0.504, Ranking Acc 0.752)
-- [x] **Exp C 训练完成** (1000 步, checkpoint-500 & checkpoint-1000)
-- [x] **Exp C eval ✅** (Kendall τ 0.584, Ranking Acc 0.792, Suc-Fail Diff 11.755)
-- [x] RL Run 1 (Exp C, buggy reward) → 失败 (reward 恒 0)
-- [x] RL Run 2 (Exp C, fixed) → 效果差 (success rate 峰值 20% 后跌至 0%)
-- [ ] **RL Run 3 (Exp D) 运行中** → 截至 20k steps 均 0%
-- [ ] Exp A 训练 (SmolVLM)
-
-### 待完成
-
-- [ ] RL Run 3 等待完成 (Exp D, 100k steps)
-- [ ] 如果 Exp D 也不行，排查 PBRS reward wrapper / SAC 超参 / DINOv2 特征质量
-- [ ] Exp A 训练 + eval
-- [ ] experiment-section-v2.md 更新 RL 结果
-- [ ] paper-draft-v2.md 需同步更新
-
----
-
 ## Round: L_struct 方向盲区诊断与修复 (2026-04-28)
 
 ### 问题诊断：L_struct 方向盲区 (Direction Blindness)
@@ -1172,3 +1031,244 @@ python robometer/evals/run_baseline_eval.py \
 **Eval 结果路径**:
 - A: `baseline_eval_output/rbm_exp_a_pure_bt_smolvlm_checkpoint-1000/`
 - B: `baseline_eval_output/rbm_exp_b_l2_smooth_smolvlm_checkpoint-1000/`
+
+---
+
+## 下游策略学习 (Downstream RL) 实验
+
+> 2026-05-01 · 对应论文 Section 5.4「下游策略学习实验」
+
+### 目的
+
+验证 BT+MaxEnt (Exp C) 训练出的奖励模型通过 PBRS 框架提供的密集奖励信号，是否能在在线 RL 中加速策略学习（相比稀疏奖励基线）。
+
+### 代码文件
+
+| 文件 | 作用 |
+|------|------|
+| `robometer/rl/sac_libero.py` | CleanRL 风格的 SAC 训练主脚本 (PyTorch, 单文件) |
+| `robometer/rl/wrappers.py` | 环境包装器：`DINOv2FeatureWrapper`（图像→384-dim 特征）、`SparseRewardWrapper`（稀疏基线）、`make_libero_env()` 工厂函数 |
+| `robometer/rl/plot_rl.py` | 从 TensorBoard event 文件生成 seaborn 学习曲线图 (PDF/PNG) |
+| `robometer/rl/__init__.py` | 包初始化 |
+
+### 环境管线 (Environment Pipeline)
+
+```
+Dense Reward (BT+MaxEnt):
+  OffScreenRenderEnv (LIBERO/robosuite, old gym API)
+    → LiberoRobometerRewardWrapper (VLM PBRS reward, 内部含 GymToGymnasiumWrapper)
+    → DINOv2FeatureWrapper (agentview_image → 384-dim CLS token + 9-dim 本体感受 = 393-dim)
+    → RecordEpisodeStatistics
+
+Sparse Reward (baseline):
+  OffScreenRenderEnv
+    → SparseRewardWrapper (每步 -1，成功时 0；内部含 GymToGymnasiumWrapper)
+    → DINOv2FeatureWrapper (同上)
+    → RecordEpisodeStatistics
+```
+
+### 奖励模型
+
+使用 Exp C (BT+MaxEnt, SmolVLM-500M) 的 checkpoint:
+
+```
+/root/autodl-tmp/robometer/logs/exp_c_dirfix_v1/exp_c_dirfix_v1/checkpoint-1000
+```
+
+**关键修改**: 原始 `extract_rewards_from_output` 将奖励值 clamp 到 `[0,1]`，导致负的进度预测被截断为 0，PBRS 信号 (`Phi(s') - Phi(s)`) 全部为零。在 `wrappers.py` 中通过 monkey-patch 移除了 clamp，让原始进度值直接参与 PBRS 计算。
+
+### SAC 超参数
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 算法 | SAC (Soft Actor-Critic) | 带自动熵调节 |
+| 观测 | 393-dim (DINOv2 384 + proprio 9) | MLP 输入 |
+| 网络 | 256-dim hidden, 2-layer MLP | Actor + 双 Critic |
+| γ | 0.99 | 折扣因子 |
+| τ | 0.005 | 目标网络 EMA 系数 |
+| batch_size | 256 | |
+| learning_rate | 3e-4 (actor, critic, alpha) | |
+| learning_starts | 5000 | 前 5000 步纯随机探索 |
+| buffer_size | 200000 | 经验回放池 |
+| total_timesteps | 100000 | |
+| eval_freq | 5000 | 每 5000 步评估 |
+| n_eval_episodes | 25 | 评估时跑 25 条轨迹 |
+| time_limit | 400 | 单回合最长步数 |
+
+### 运行训练
+
+**Dense reward (本文方法):**
+
+```bash
+cd /root/autodl-tmp/robometer
+nohup .venv/bin/python -u robometer/rl/sac_libero.py \
+  --task-suite-name libero_90 \
+  --task-id 28 \
+  --model-path /root/autodl-tmp/robometer/logs/exp_c_dirfix_v1/exp_c_dirfix_v1/checkpoint-1000 \
+  --total-timesteps 100000 \
+  --seed 42 \
+  --log-freq 1000 \
+  --eval-freq 5000 \
+  --n-eval-episodes 25 \
+  --save-freq 25000 \
+  > runs/sac_task28_seed42.log 2>&1 &
+```
+
+**Sparse reward (基线):**
+
+```bash
+cd /root/autodl-tmp/robometer
+nohup .venv/bin/python -u robometer/rl/sac_libero.py \
+  --task-suite-name libero_90 \
+  --task-id 28 \
+  --no-reward-model \
+  --total-timesteps 100000 \
+  --seed 42 \
+  --log-freq 1000 \
+  --eval-freq 5000 \
+  --n-eval-episodes 25 \
+  --save-freq 25000 \
+  > runs/sac_task28_sparse_seed42.log 2>&1 &
+```
+
+**速度对比**: Dense ~1.6 SPS (受 VLM 推理拖慢), Sparse ~3.6 SPS (无 VLM)。100k 步 dense ≈ 17h, sparse ≈ 8h.
+
+**查看训练日志:**
+
+```bash
+tail -f runs/sac_task28_seed42.log          # dense
+tail -f runs/sac_task28_sparse_seed42.log   # sparse
+```
+
+### TensorBoard 日志
+
+训练产生的 TensorBoard event 文件位于 `runs/` 目录下：
+
+```
+runs/
+├── libero_90_t28__sac_libero__42__1777635189/   # dense reward run
+│   └── events.out.tfevents.xxx
+├── libero_90_t28__sparse__42__1777635963/       # sparse baseline run
+│   └── events.out.tfevents.xxx
+├── sac_task28_seed42.log                        # dense stdout log
+└── sac_task28_sparse_seed42.log                 # sparse stdout log
+```
+
+**可查看的 TensorBoard 标签:**
+
+| Tag | 含义 | 用途 |
+|-----|------|------|
+| `eval/success_rate` | 评估成功率 (0~1) | **论文核心图表** |
+| `eval/mean_return` | 评估平均回合奖励 | 辅助图表 |
+| `eval/mean_length` | 评估平均回合长度 | 参考 |
+| `train/episode_return` | 训练回合奖励 | 过程监控 |
+| `train/episode_success` | 训练回合是否成功 | 过程监控 |
+| `train/episode_length` | 训练回合长度 | 过程监控 |
+| `losses/qf_loss` | Critic 损失 | 调试用 |
+| `losses/actor_loss` | Actor 损失 | 调试用 |
+| `losses/alpha` | 熵系数 | 调试用 |
+| `charts/SPS` | Steps Per Second | 性能监控 |
+
+启动 TensorBoard:
+
+```bash
+tensorboard --logdir runs/ --bind_all --port 6007
+```
+
+### 画图
+
+使用 `robometer/rl/plot_rl.py` 从 TensorBoard event 文件生成论文图表。
+
+**方式 1：指定 run 目录 + 标签**
+
+```bash
+# 核心图：Success Rate vs Training Steps (论文 Figure)
+python robometer/rl/plot_rl.py \
+    --run-dirs runs/libero_90_t28__sac_libero__42__1777635189 \
+               runs/libero_90_t28__sparse__42__1777635963 \
+    --labels "BT+MaxEnt (Ours)" "Sparse Reward" \
+    --tag eval/success_rate \
+    --output figures/rl_success_rate.pdf \
+    --smooth 0.0
+
+# Episode Return 曲线 (辅助)
+python robometer/rl/plot_rl.py \
+    --run-dirs runs/libero_90_t28__sac_libero__42__1777635189 \
+               runs/libero_90_t28__sparse__42__1777635963 \
+    --labels "BT+MaxEnt (Ours)" "Sparse Reward" \
+    --tag eval/mean_return \
+    --output figures/rl_eval_return.pdf \
+    --smooth 0.6
+```
+
+**方式 2：自动发现所有 run 并生成全部图表**
+
+```bash
+# 自动将目录名含 "sparse" 的识别为 Sparse Reward，其余为 BT+MaxEnt
+python robometer/rl/plot_rl.py \
+    --run-root runs/ \
+    --output figures/ \
+    --smooth 0.6
+```
+
+自动生成: `figures/rl_success_rate.{pdf,png}`, `figures/rl_eval_return.{pdf,png}`, `figures/rl_train_return.{pdf,png}`
+
+**画图选项:**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--smooth` | 0.6 | EMA 平滑权重 (0=不平滑, 0.9=很平滑) |
+| `--lang` | zh | 坐标轴标签语言 (zh/en) |
+| `--tag` | 不指定=画全部 | 指定则只画一张图 |
+
+### 论文中需要展示的指标
+
+论文 Section 5.4 需要的核心图表:
+
+1. **`figures/rl_success_rate.pdf`** — **最重要**: 评估成功率 vs 训练步数
+   - X 轴: 环境步数 (0 ~ 100k)
+   - Y 轴: 评估成功率 (0% ~ 100%)
+   - 蓝线: BT+MaxEnt (本文方法)
+   - 橙线: Sparse Reward (基线)
+   - 对应 `minev3.tex` 中的 `\cref{fig:rl_success_rate}`
+
+2. **`figures/rl_eval_return.pdf`** — 辅助 (可选): 评估回合奖励 vs 训练步数
+   - 展示密集奖励方案即使在成功率为 0 时也有训练信号
+
+**关于不等 100k 步的合理性**: 原文 ROBOMETER 论文显示 dense vs sparse 的差距在 20-30k 步时已经明显可见（稀疏奖励长期停在 0% 而密集奖励开始攀升）。因此即使只跑到 30k 步也可以得到有意义的图表。
+
+### 调试笔记
+
+在搭建过程中踩过的关键坑：
+
+1. **EGL 报错**: LIBERO 环境需要设置 `MUJOCO_GL=osmesa` (在 `sac_libero.py` 开头自动设置)。
+
+2. **DINOv2 加载失败** (网络受限): `torch.hub.load` 尝试从 GitHub 下载。改为从本地缓存加载:
+   ```python
+   hub_repo = os.path.expanduser("~/.cache/torch/hub/facebookresearch_dinov2_main")
+   sys.path.insert(0, hub_repo)
+   from hubconf import dinov2_vits14
+   ```
+
+3. **奖励模型路径**: 必须用**绝对路径**，且指向 checkpoint 子目录 (`checkpoint-1000`)，其父目录必须包含 `config.yaml`。相对路径 (`./logs/...`) 会被 `resolve_checkpoint_path` 误识别为 HuggingFace repo ID。
+
+4. **PBRS 信号为零**: `extract_rewards_from_output` 将奖励 clamp 到 `[0,1]`，但训练初期进度预测为负值，clamp 后全部为 0，导致 `Phi(s') - Phi(s) = 0`。通过 monkey-patch 移除 clamp 解决。
+
+5. **环境双重包装**: `LiberoRobometerRewardWrapper` 内部已自带 `GymToGymnasiumWrapper`，外层不能再包一次。
+
+6. **OffScreenRenderEnv 无 action_space 属性**: robosuite 环境不遵循 gym API。`SparseRewardWrapper` 需要手动构造 `action_space`:
+   ```python
+   act_dim = env.robots[0].action_dim  # = 7
+   self.action_space = gym.spaces.Box(low=-1., high=1., shape=(act_dim,))
+   ```
+
+7. **日志垃圾**: TensorFlow/transformers/loguru 产生大量无关日志。通过环境变量 (`TF_CPP_MIN_LOG_LEVEL=3`, `ROBOMETER_LOG_LEVEL=ERROR`) 和 `logging.getLogger().setLevel(ERROR)` 压制。
+
+### 当前运行状态 (2026-05-01 19:49)
+
+| Run | PID | 步数 | SPS | 状态 | TensorBoard 目录 |
+|-----|-----|------|-----|------|-----------------|
+| Dense (BT+MaxEnt) | 34979 | ~1530 | 1.6 | 运行中，已有 1 次 success (ep3) | `runs/libero_90_t28__sac_libero__42__1777635189` |
+| Sparse (baseline) | 43107 | ~1130 | 3.6 | 运行中，0 次 success | `runs/libero_90_t28__sparse__42__1777635963` |
+
+首次评估数据将在 step 5000 时出现 (dense ~35min, sparse ~15min from now)。
